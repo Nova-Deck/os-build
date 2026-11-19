@@ -23,10 +23,8 @@
 # pac-ret branch protection MUST be off: it clobbers the registers FEX's JIT relies on. -O3
 # matches upstream's own release build.
 #
-# The overlay builder invokes this under arm64 emulation and runs `makepkg --skipinteg`, so the
-# sha256sums below are NOT enforced by makepkg. prepare() therefore re-verifies the sysroot
-# packages itself with an explicit `sha256sum -c` — that check is the real integrity gate. FEX
-# itself is pinned by commit, which git verifies for us.
+# makepkg checks the sysroot packages against sha256sums before prepare() runs, so those six
+# hashes are the sysroot's integrity gate. FEX itself is pinned by commit, which git verifies.
 #
 # To bump: move _commit to a new FEX-<ver> tag and set pkgver to match. Do NOT refresh the
 # sysroot pins as a reflex — they track packages/fex-rootfs, not the FEX version, because the
@@ -138,16 +136,6 @@ prepare() {
   git submodule update --init --depth 1 -- "${_submodules[@]}"
 
   cd "$srcdir"
-
-  # Real integrity gate for the sysroot (makepkg runs with --skipinteg here).
-  sha256sum -c --strict <<-EOF
-	5db2283f5b46b6114d06b4bc71fcf8ede5f1a04fcccb4d307048fcdc4e501d93  glibc-${_glibc_ver}-x86_64.pkg.tar.zst
-	8aaea9fbcacd58c7114b13de001ca354017afa09bb396c382683f7d20d94999c  lib32-glibc-${_glibc_ver}-x86_64.pkg.tar.zst
-	1d79371ccf3138e3c172dd83b51560687b65ab824c1ad7e9cb41b7857ed9c55f  gcc-${_gcc_ver}-x86_64.pkg.tar.zst
-	15dc6bd2f3a2ee17fcd79a14325e9e0037722a592b2bdc55e1665d92112eaa51  libstdc++-${_gcc_ver}-x86_64.pkg.tar.zst
-	21fde8d5c5fda174b0277515fb6e49a450763a9c8a05f1956f719779e459465a  lib32-gcc-libs-${_gcc_ver}-x86_64.pkg.tar.zst
-	a6edb1e19a58c43abb93b38e70eb327b2e8b0c15aa74abf31a187c0ee6a5d732  linux-api-headers-${_lah_ver}-x86_64.pkg.tar.zst
-	EOF
 
   # Assemble the x86 sysroot. Each Arch package is rooted at usr/, so extracting only that path
   # merges them cleanly and drops the package metadata (.PKGINFO/.BUILDINFO/.MTREE).

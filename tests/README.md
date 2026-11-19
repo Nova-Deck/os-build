@@ -37,6 +37,8 @@ are invoked directly there rather than through `make test-disk` — a failure na
 - **Graphics and emulation** — `test-graphics-provider.sh`, `test-video-decode.sh`,
   `test-proton-dxvk.sh`, `test-proton-nice.sh`.
 - **Publishing** — `test-publish-bundle.sh`, `test-publish-card.sh`, `test-verify-signing.sh`.
+- **Overlay builder** — `test-overlay-pkgbuild.sh` (the PKGBUILD edit, and makepkg's integrity
+  flags), `test-mesa-source.sh`.
 
 ## Adding one
 

@@ -5,10 +5,14 @@
 # real ACTIVE seat0 logind session via SDDM autologin; see source.pin for the why.
 #
 # All Qt6 build/runtime deps resolve from the holo `extra` repo, so this is a single clean build.
-# build-overlay.sh bumps pkgrel via pkgrel_suffix so pacman prefers this over any future holo sddm,
-# and makepkg runs with --skipinteg (hence b2sums=SKIP; the source is pinned by the version tag).
+# build-overlay.sh bumps pkgrel via pkgrel_suffix so pacman prefers this over any future holo sddm.
 #
-# To bump sddm: change pkgver and re-verify the cmake options against the new release's CMakeLists.
+# The b2sum pins the GitHub release tarball; a tag moved upstream, or the archive regenerated, now
+# fails the build. Cross-checked against Fedora's lookaside record for the same file (its sources
+# file holds the tarball's sha512), so the hash is the one other distributions build from.
+#
+# To bump sddm: change pkgver, take the new tarball's b2sum and cross-check it the same way, and
+# re-verify the cmake options against the new release's CMakeLists.
 #
 # Contributor: novadeck
 
@@ -36,7 +40,7 @@ makedepends=(
   qt6-tools
 )
 source=("$url/archive/v$pkgver/$pkgname-$pkgver.tar.gz")
-b2sums=('SKIP')
+b2sums=('849cb8b06b9510e5366ea28ef322c242db7d5a77d94c0a5a727f468209880a717055ad8b0c2f5a857852202a4d6bc1f68281fe0e0ab3c6a32327b5a4219af3a0')
 
 prepare() {
   # sddm 0.21.0 still declares cmake_minimum_required(VERSION < 3.5), which CMake 4 (in the

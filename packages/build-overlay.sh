@@ -25,6 +25,7 @@
 # Reads build/builder.pin (via build/lib-pins.sh). Re-run is cheap to invoke but an emulated build itself is slow.
 #
 #   packages/build-overlay.sh [--only <name>]... [--no-index] [--prune-retired]
+#   packages/build-overlay.sh --verify-sources [--only <name>]...
 #
 # --only    build ONLY the named package(s), instead of every package whose inputs changed.
 #           Repeatable. This is what lets the CI compile pass fan out one package per job
@@ -36,6 +37,11 @@
 #           produce a db describing a subset. Whoever assembles the full repo indexes it.
 # --prune-retired  purge artifacts + stamps of packages no packages/*/source.pin names any more.
 #           CI passes it over a cache-restored repo; see the purge loop below for why it is opt-in.
+# --verify-sources  stage every selected package, whatever its stamp, and run `makepkg
+#           --verifysource` on it: download every source and check it against the PKGBUILD's
+#           checksums, building nothing. The repo, the stamps and the db are not touched. It
+#           reports every package and fails if any did, so one stale hash does not hide the next.
+#           Minutes, where finding the same thing by rebuilding would take hours.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -43,12 +49,14 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ONLY=()
 DO_INDEX=1
 PRUNE_RETIRED=0
+VERIFY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --only) [ $# -ge 2 ] || { echo "--only needs a package name" >&2; exit 2; }; ONLY+=("$2"); shift 2 ;;
     --no-index) DO_INDEX=0; shift ;;
     --prune-retired) PRUNE_RETIRED=1; shift ;;
-    -h|--help) sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --verify-sources) VERIFY=1; shift ;;
+    -h|--help) sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument '$1' (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -229,11 +237,14 @@ for pin in "${PINS[@]}"; do
       [ -f "$REPO_DIR/$f" ] || { why="artifact missing: $f"; break; }
     done < "$STAMPS/$name.files"
   fi
-  if [ -z "$why" ]; then
+  if [ "$VERIFY" -eq 1 ]; then
+    echo "[overlay] $name: staging to verify its sources" >&2
+  elif [ -z "$why" ]; then
     echo "[overlay] $name: up-to-date (${hash:0:12}) — skip" >&2
     continue
+  else
+    echo "[overlay] $name: $why — building" >&2
   fi
-  echo "[overlay] $name: $why — building" >&2
 
   # Stage: fetch (or copy) the PKGBUILD, drop patches in, edit the PKGBUILD. Fresh per-package
   # staging dir so a re-stage never mixes with a prior attempt.
@@ -277,46 +288,54 @@ for pin in "${PINS[@]}"; do
   # unreachable for over half an hour on 2026-08-23, and the same helper serves mesa-x86 and
   # mesa-android so all three drivers fetch through one verified path.
   #
-  # The helper owns verification (it checks the PKGBUILD's sha256 whichever host answered), which
-  # matters here because makepkg runs with --skipinteg -- so without this, the host mesa tarball
-  # was the one input in this pipeline nothing checked at all.
+  # The helper checks the PKGBUILD's sha256 whichever host answered, and makepkg checks the same
+  # sha256 again once the file is in place. The helper's own check is what serves mesa-x86 and
+  # mesa-android, which are not built by makepkg.
   if [ -x "$pdir/fetch-source.sh" ]; then
     echo "[overlay] $name: pre-seeding source via fetch-source.sh" >&2
     "$pdir/fetch-source.sh" "$bd"
   fi
 
   # Edit the PKGBUILD: bump pkgrel, register our patches as local sources (so makepkg copies
-  # them into $srcdir), and apply them right after the first `cd <dir>` in prepare().
-  PATCHES="$patches" SUFFIX="$suffix" python3 - "$bd/PKGBUILD" <<'PY'
-import os, re, sys
-pkgbuild = sys.argv[1]
-patches  = os.environ.get("PATCHES", "").split()
-suffix   = os.environ.get("SUFFIX", "").strip()
-lines    = open(pkgbuild).read().splitlines()
-
-out, in_prepare, applied = [], False, False
-for line in lines:
-    m = re.match(r'^pkgrel=(\S+)', line)
-    if m and suffix:
-        out.append('pkgrel=%s.%s' % (m.group(1), suffix)); continue
-    out.append(line)
-    if re.match(r'^prepare\s*\(\)', line):
-        in_prepare = True
-    if in_prepare and not applied and re.match(r'^\s*cd\s+\S+', line):
-        for p in patches:
-            out.append('  patch -p1 < "$srcdir/%s"' % p)
-        applied = True
-
-text = "\n".join(out) + "\n"
-if patches:
-    text += "\nsource+=(%s)\n" % " ".join("'%s'" % p for p in patches)
-open(pkgbuild, "w").write(text)
-if patches and not applied:
-    sys.stderr.write("ERROR: no 'cd <dir>' found in prepare(); cannot place patch step\n")
-    sys.exit(3)
-PY
+  # them into $srcdir) with a SKIP in each checksum array, and apply them right after the first
+  # `cd <dir>` in prepare(). packages/overlay-pkgbuild.py says why the SKIPs; the offline suite
+  # tests/test-overlay-pkgbuild.sh covers it.
+  # shellcheck disable=SC2086  # $patches is the pin's space-separated list, one word per patch
+  python3 "$ROOT/packages/overlay-pkgbuild.py" "$bd/PKGBUILD" --suffix "$suffix" $patches
   BUILD_NAMES+=("$name")
 done
+
+# --verify-sources: one container for every staged package (nothing is installed, so nothing can
+# leak from one package into the next), then stop before anything below touches the repo.
+if [ "$VERIFY" -eq 1 ]; then
+  [ ${#BUILD_NAMES[@]} -gt 0 ] || { echo "[overlay] --verify-sources: nothing selected" >&2; exit 1; }
+  pins_builder_ensure >/dev/null
+  echo "[overlay] verifying the sources of ${#BUILD_NAMES[@]} package(s)" >&2
+  docker run --rm --platform linux/arm64 \
+    -e HOSTUID="$(id -u)" -e HOSTGID="$(id -g)" -e PKGS="${BUILD_NAMES[*]}" \
+    -v "$STAGE":/stage "$DEVEL_REF" \
+    bash -uo pipefail -c '
+      useradd -m builder 2>/dev/null || true
+      pacman -Sy --needed --noconfirm git >/dev/null || exit 1
+      failed=()
+      for p in $PKGS; do
+        chown -R builder "/stage/$p"
+        echo "[overlay] === verify $p ===" >&2
+        if ( cd "/stage/$p" && sudo -u builder \
+               env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1 \
+               makepkg --verifysource --skippgpcheck --noconfirm --noprogressbar ) >&2; then
+          echo "[overlay] $p: sources verified" >&2
+        else
+          echo "[overlay] $p: SOURCE VERIFICATION FAILED" >&2
+          failed+=("$p")
+        fi
+        chown -R "$HOSTUID:$HOSTGID" "/stage/$p"
+      done
+      [ ${#failed[@]} -eq 0 ] || { echo "[overlay] failed: ${failed[*]}" >&2; exit 1; }
+      echo "[overlay] every source verified" >&2
+    ' >&2
+  exit $?
+fi
 
 # --prune-retired: stamps for a package that no longer HAS a source.pin — an overlay retired back
 # to holo's build. Nothing above visits it, so its artifacts would stay in the repo and be
@@ -379,8 +398,17 @@ fi
 
 # Build inside the pinned base-devel image: under arm64 qemu emulation on an x86 dev box, natively on
 # an aarch64 host (the CI runners). makepkg refuses to run as root, so create an unprivileged builder with passwordless sudo (makepkg -s installs the
-# makedepends via pacman). --skipinteg skips checksum validation for our added patch sources;
-# the upstream gamescope is still pinned by the PKGBUILD's git #commit=<tag>.
+# makedepends via pacman).
+#
+# CHECKSUMS ARE ON, PGP IS OFF. Every source is checked against the PKGBUILD's checksum arrays: a
+# release tarball upstream re-rolled, or a mirror serving something else, stops the build (#150).
+# The patches build-overlay injects carry 'SKIP' (packages/overlay-pkgbuild.py); inputhash.sh has
+# already hashed them. Never use --skipinteg to make room for a source: it turns EVERY checksum
+# off, tarballs included, and tests/test-overlay-pkgbuild.sh fails on it. --skippgpcheck is
+# needed because the builder's keyring is empty and makepkg fetches no keys, so the signed git
+# tags (crun, podman) would fail. Their content is pinned by checksum all the same (makepkg >= 6.1
+# hashes a git source's checked-out tree), and a signature is checked by hand when a pin is bumped
+# (mesa's .sig, see its PKGBUILD).
 pins_builder_ensure >/dev/null
 
 # ONE FRESH CONTAINER PER PACKAGE. An earlier design built every package in a single shared
@@ -452,7 +480,7 @@ for name in "${BUILD_NAMES[@]}"; do
       ( cd "/stage/$PKG" && sudo -u builder \
           env PKGDEST="/stage/$PKG/out" "${ccache_env[@]}" \
               GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1 \
-          makepkg -sf --noconfirm --nocheck --skipinteg --noprogressbar )
+          makepkg -sf --noconfirm --nocheck --skippgpcheck --noprogressbar )
       cp "/stage/$PKG/out"/*.pkg.tar.zst /repo/
       chown -R "$HOSTUID:$HOSTGID" "/stage/$PKG" /repo
       if [ "$USE_CCACHE" != 0 ]; then

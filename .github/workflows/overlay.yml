@@ -49,7 +49,9 @@ on:
       - 'packages/*/PKGBUILD'
       - 'packages/*/*.patch'
       - 'packages/*/*.conf'
+      - 'packages/*/*.py'
       - 'packages/build-overlay.sh'
+      - 'packages/overlay-pkgbuild.py'
       - 'packages/inputhash.sh'
       - 'build/builder.pin'
       - 'build/snapshot.pin'
@@ -64,10 +66,13 @@ on:
       - 'packages/*/source.pin'
       - 'packages/*/patches/**'
       - 'packages/*/PKGBUILD'
-      # `local_sources:` beside a local PKGBUILD (packages/yajl, packages/containers-common).
+      # `local_sources:` beside a local PKGBUILD (packages/yajl, packages/containers-common; the
+      # build-time checks of packages/gogdl and packages/legendary).
       - 'packages/*/*.patch'
       - 'packages/*/*.conf'
+      - 'packages/*/*.py'
       - 'packages/build-overlay.sh'
+      - 'packages/overlay-pkgbuild.py'
       - 'packages/inputhash.sh'
       - 'build/builder.pin'
       - 'build/snapshot.pin'
@@ -185,7 +190,7 @@ jobs:
             changed="$(git diff --name-only "origin/$BASE_REF...HEAD")"
             # A change to the builder itself, the hash formula, or the container it builds in can
             # break any package, so it selects all of them.
-            if printf '%s\n' "$changed" | grep -qE '^(packages/build-overlay\.sh|packages/inputhash\.sh|build/builder\.pin|build/snapshot\.pin|build/lib-pins\.sh)$'; then
+            if printf '%s\n' "$changed" | grep -qE '^(packages/build-overlay\.sh|packages/overlay-pkgbuild\.py|packages/inputhash\.sh|build/builder\.pin|build/snapshot\.pin|build/lib-pins\.sh)$'; then
               sel="$(all)"
               why="the builder or its base image moved — building everything"
             else

@@ -29,13 +29,13 @@
 # with Valve's lavd work on top, plus two commits of Valve's own (lavd as the default in
 # services/scx, crate vendoring). It is what the Steam Frame ships. Valve's repo
 # (gitlab.steamos.cloud/holo/scx) is SSH-only, so we take the published holo-main SOURCE tarball:
-# a PKGBUILD next to a bare clone of that repo. prepare() checks the tarball hash, checks the tag
-# still names the pinned commit, and exports the tree from it. The "1.1.4" in the version is
+# a PKGBUILD next to a bare clone of that repo. makepkg checks the tarball hash, prepare() checks
+# the tag still names the pinned commit and exports the tree from it. The "1.1.4" in the version is
 # Valve's label only; this is NOT the upstream 1.1.4 release.
 #
 # To bump: take the newest scx-scheds-*.src.tar.gz under
 # steamdeck-packages.steamos.cloud/archlinux-mirror/sources/holo-main/ and set pkgver, Valve's
-# pkgrel (the literal -1 in source= and in prepare()'s tarball path), sha256sums and _commit
+# pkgrel (the literal -1, twice in source=), sha256sums and _commit
 # together (`git --git-dir=scx-scheds/scx rev-parse v<pkgver>^{commit}`).
 # Re-check services/scx.service and services/scx still exist, that services/scx still sets the
 # flags package() asserts, and re-read the tree's own kernel.config against kernel/kernel.config.
@@ -96,12 +96,9 @@ _commit=9ffc8c742d121e871a0ea5195e426e3cfa81d754
 _scheds=(scx_lavd scx_bpfland scx_rusty)
 
 prepare() {
-  # build-overlay.sh runs makepkg with --skipinteg (it has to, for the patch sources it injects
-  # into other packages), so the sha256sums array above is never actually checked. Assert the
-  # tarball hash ourselves — otherwise the pin is decorative and this build silently trusts
-  # whatever GitHub served.
-  echo "${sha256sums[0]}  $srcdir/$pkgname-$pkgver-1.src.tar.gz" | sha256sum -c -
-
+  # makepkg has already checked the tarball against sha256sums; the tag check below pins what
+  # inside it gets built.
+  #
   # makepkg extracted the tarball to scx-scheds/{PKGBUILD,scx}; scx is a bare clone. Export the
   # tagged tree from it rather than building in a checkout, so nothing outside the tag leaks in.
   local _repo="$srcdir/$pkgname/scx"

@@ -353,61 +353,75 @@ jobs:
           )"
 
   scx:
-    name: scx-scheds release
+    name: scx-scheds in holo-main
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Compare upstream releases against the PKGBUILD
+      - name: Compare Valve's holo-main source tarballs against the PKGBUILD
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # Baseline is pkgver, like mesa: packages/scx-scheds/source.pin carries no version field,
-          # and the PKGBUILD is what a bump actually edits. GH_REPO points at THIS repo so
-          # `gh issue create` files here; `gh api repos/sched-ext/scx` names its target explicitly.
-          pinned="$(sed -n 's/^pkgver=//p' packages/scx-scheds/PKGBUILD | head -1)"
-          [ -n "$pinned" ] || { echo "::error::packages/scx-scheds/PKGBUILD has no pkgver= line"; exit 1; }
+          # We build Valve's SteamOS scx tree from its published holo-main SOURCE tarball, not an
+          # upstream sched-ext/scx release (see the packages/scx-scheds/PKGBUILD header), so the
+          # holo-main directory is the only place a version we can take appears. This job used to
+          # watch upstream's GitHub releases instead, and that was blind twice over: upstream v1.1.4
+          # was a lavd DOWNGRADE against Valve's tree (#119, declined), while Valve's own
+          # 1.1.4.linux.steamos.2 tarball, the trigger #119 was waiting for, never fired anything.
+          #
+          # Baseline is the file name the PKGBUILD downloads, read by sourcing it (top-level
+          # assignments only; sourcing defines the functions, it does not run them). That carries
+          # Valve's pkgrel too (the `-1` in source=), so a Valve REBUILD of the same pkgver
+          # (1.1.3.linux.steamos.2-2 next to our -1) is also reported, not just a new version.
+          pinned_file="$(bash -c 'source packages/scx-scheds/PKGBUILD >/dev/null 2>&1; echo "${source[0]##*/}"')"
+          pinned="${pinned_file#scx-scheds-}"; pinned="${pinned%.src.tar.gz}"
+          case "$pinned_file" in
+            scx-scheds-*-*.src.tar.gz) ;;
+            *) echo "::error::packages/scx-scheds/PKGBUILD source[0] is '$pinned_file', not a scx-scheds-<pkgver>-<pkgrel>.src.tar.gz"; exit 1 ;;
+          esac
 
-          # Three numeric components only. Upstream tags every third-party scheduler drop into the
-          # same release stream (scx_cake 1.2.0, scx_mlfq 1.0.0 rode in on v1.1.3), so anchor the
-          # pattern to a v-prefixed release tag and let sort -V order 1.1.10 after 1.1.9.
-          latest="$(gh api repos/sched-ext/scx/releases --paginate \
-              --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' \
-            | grep -oE '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -uV | tail -1 || true)"
-          # The `|| true` is what lets the guard below do the reporting: under `set -o pipefail` a
-          # grep that matches nothing fails the whole substitution, and `set -e` would then kill the
-          # step SILENTLY at the assignment — red, as the header requires, but with no line saying
-          # why. Same reason the kernel job ends its filter pipeline with `|| true`.
-          [ -n "$latest" ] || { echo "::error::no vX.Y.Z releases found for sched-ext/scx"; exit 1; }
+          index="https://steamdeck-packages.steamos.cloud/archlinux-mirror/sources/holo-main/"
+          listing="$(curl -fsSL --connect-timeout 20 --retry 2 "$index")"
+          # sort -V orders Valve's names the way pacman would for every name published so far:
+          # 1.1.10 after 1.1.4, -2 after -1, and 1.1.2.linux.steamos-2.1 after -2. It is not
+          # vercmp (no epoch, no alpha/beta rules), and does not need to be: these names carry
+          # neither. `|| true` for the same reason as the other jobs: under pipefail a grep that
+          # matches nothing would kill the step at the assignment with no line saying why.
+          latest="$(printf '%s\n' "$listing" \
+            | grep -oE 'scx-scheds-[0-9][^"<>/[:space:]]*-[0-9][0-9.]*\.src\.tar\.gz' \
+            | sed 's/^scx-scheds-//; s/\.src\.tar\.gz$//' | sort -uV | tail -1 || true)"
+          [ -n "$latest" ] || { echo "::error::no scx-scheds-*.src.tar.gz found under $index"; exit 1; }
 
           echo "pinned=$pinned latest=$latest"
-          # Newer, not merely different: if we ever pin ahead of the release list this stays quiet.
+          # Newer, not merely different: if we ever pin ahead of the listing this stays quiet.
           newer="$(printf '%s\n%s\n' "$pinned" "$latest" | sort -V | tail -1)"
           if [ "$latest" = "$pinned" ] || [ "$newer" != "$latest" ]; then
             echo "pin is current"
             exit 0
           fi
 
-          title="upstream: scx-scheds $latest released (pinned: $pinned)"
+          title="upstream: scx-scheds $latest in holo-main (pinned: $pinned)"
           if [ "$(gh issue list --state all --search "in:title \"$title\"" --json number --jq length)" -gt 0 ]; then
             echo "issue already filed for $latest"; exit 0
           fi
           gh issue create --title "$title" --assignee "$ASSIGNEE" \
             --label P2 --label area/power --body "$(cat <<EOF
-          Upstream released **scx $latest**; we build **$pinned**.
-          Release: https://github.com/sched-ext/scx/releases/tag/v$latest
+          Valve published **scx-scheds $latest** in holo-main; we build **$pinned**.
+          Source: ${index}scx-scheds-$latest.src.tar.gz
 
           scx_lavd is opt-in (the default CPU scheduler is \`none\`, the stock in-kernel EEVDF), so a
           regression here is INVISIBLE to anyone who never turns it on. That cuts both ways: it is a
-          low-risk bump to take, and a bad one can sit unnoticed. Drill:
+          low-risk bump to take, and a bad one can sit unnoticed. Drill (the PKGBUILD header has the
+          full procedure):
 
-          - [ ] we build from Valve's SteamOS scx tree, not upstream releases (see the PKGBUILD header): first check whether a newer \`scx-scheds-*.src.tar.gz\` under steamdeck-packages.steamos.cloud/archlinux-mirror/sources/holo-main/ already carries this release, and prefer that. Either way pkgver + sha256sums (+ \`_commit\` for Valve's tree) move together; \`prepare()\` re-asserts the hash itself, because build-overlay.sh runs makepkg with \`--skipinteg\`
+          - [ ] \`packages/scx-scheds/PKGBUILD\`: pkgver + Valve's pkgrel (the literal \`-1\` in \`source=\` and in \`prepare()\`'s tarball path) + sha256sums + \`_commit\` together (\`git --git-dir=scx-scheds/scx rev-parse v<pkgver>^{commit}\`); \`prepare()\` re-asserts the hash itself, because build-overlay.sh runs makepkg with \`--skipinteg\`. If only Valve's pkgrel moved, diff the two tarballs' PKGBUILDs first: a packaging-only rebuild may not be worth taking
+          - [ ] Valve's version label is not upstream's release (the PKGBUILD header explains). Compare the tree against the lavd commits we carry today: #119 is the worked example of a newer number that was a lavd downgrade
           - [ ] \`services/scx.service\` and \`services/scx\` still exist at those paths (\`package()\` installs both). \`package()\` prepends \`--autopower\` to the \`SCX_FLAGS=\` line in \`services/scx\` and asserts the exact result (\`--autopower --pinned-slice-us 500 --dd-max-wait-us 0\`, the Steam Frame's flags); a source that sets different flags, or none, fails the build until that is decided
-          - [ ] re-read the tarball's own \`kernel.config\` against \`kernel/kernel.config\` — it is upstream's authoritative CONFIG_* list and it does change between releases. Before adding a symbol, check whether it is promptless and already resolves \`=y\` from defconfig
-          - [ ] read the release notes for scx_lavd changes GATED ON KERNEL VERSION. 1.1.3 dropped ops.cpu_acquire/release for \`tp_btf/sched_switch\` on kernels >= 6.19; a kernel-gated attach can need a CONFIG the upstream kernel.config lists but our fragment never named, and upstream's file does not have to change for our exposure to
+          - [ ] re-read the tree's own \`kernel.config\` against \`kernel/kernel.config\` — it is upstream's authoritative CONFIG_* list and it does change between releases. Before adding a symbol, check whether it is promptless and already resolves \`=y\` from defconfig
+          - [ ] read the lavd changes for behaviour GATED ON KERNEL VERSION. 1.1.3 dropped ops.cpu_acquire/release for \`tp_btf/sched_switch\` on kernels >= 6.19; a kernel-gated attach can need a CONFIG the upstream kernel.config lists but our fragment never named, and upstream's file does not have to change for our exposure to
           - [ ] \`rust/scx_cargo/src/bpf_builder.rs\` still calls \`.rustfmt("disable_rustfmt")\`. The qemu shim in \`build()\` exists ONLY to answer that sentinel — if upstream renames it the shim stops matching, which must fail loudly rather than silently reformat
-          - [ ] \`scheds/rust/scx_{lavd,bpfland,rusty}\` still exist and \`Cargo.lock\` is still checked in (build() runs \`--frozen\`)
+          - [ ] \`scheds/rust/scx_{lavd,bpfland,rusty}\` still exist and the vendored crates still let \`build()\` run \`--frozen\`
           - [ ] \`make overlay\` then \`make relock\`; read the \`rootfs/manifest.lock\` diff rather than refreshing it blind
           - [ ] HW pass with the scheduler actually SELECTED (\`novadeck-scheduler lavd\`) and a real gameplay leg — the shipped flags include \`--autopower\`, so also confirm lavd still follows the active power profile off novadeck-powerd's PowerProfiles name
           EOF

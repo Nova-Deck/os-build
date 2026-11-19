@@ -1,0 +1,30 @@
+From: sunshineinabox <aqemail@gmail.com>
+Date: Mon, 16 Nov 2026 20:00:00 +0000
+Subject: [PATCH] cpufreq: dt-platdev: block SM8750
+
+The SM8750 CPUs carry OPP tables here, for the DDR and LLCC bandwidth
+votes scmi-cpufreq casts from them. cpufreq-dt-platdev sees the tables
+and registers cpufreq-dt as well, which cannot drive these CPUs: every
+boot logs eight "cpufreq_init: failed to get clk: -2" errors and
+"cpufreq-dt: failed register driver: -19". Seen on the KONKR Pocket FIT
+Elite on 2026-11-16.
+
+Block the platform, as SM8550 and SM8650 already are.
+---
+ drivers/cpufreq/cpufreq-dt-platdev.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/cpufreq/cpufreq-dt-platdev.c b/drivers/cpufreq/cpufreq-dt-platdev.c
+--- a/drivers/cpufreq/cpufreq-dt-platdev.c
++++ b/drivers/cpufreq/cpufreq-dt-platdev.c
+@@ -187,6 +187,7 @@ static const struct of_device_id blocklist[] __initconst = {
+ 	{ .compatible = "qcom,sm8450", },
+ 	{ .compatible = "qcom,sm8550", },
+ 	{ .compatible = "qcom,sm8650", },
++	{ .compatible = "qcom,sm8750", },
+
+ 	{ .compatible = "st,stih407", },
+ 	{ .compatible = "st,stih410", },
+--
+2.47.3
+

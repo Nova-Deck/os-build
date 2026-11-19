@@ -105,7 +105,12 @@ native page is inactive and the legacy row (`GamePage.tsx`) renders as before.
   - [x] press Install: installs (Master of Magic Classic, user 2026-11-19)
   - [x] downloading: button reads Pause, bar under the button moves; Pause stops (resumable)
   - [x] paused: Resume + status line
-  - [ ] finishing: disabled button with throbber; stale: disabled button (check 14 draws no throbber)
+  - [x] finishing: not caught on a reinstall of Another World (user, 2026-11-19): the window is
+        "CLI done" → the next finish pass (FINISH_EVERY = 10 s), here at most ~10 s before the
+        10:50:09 edit, and the page polls every 2 s. Its look is status 3, the SAME as a press being
+        answered (the spinner after Install), which the walkthrough saw — so covered.
+  - [~] stale (removed from the store): disabled button, status 14. NOT TESTABLE on demand — it
+        only happens when a store drops a title; covered by the offline status table only
   - [x] installed: trash and gear Uninstall… open the uninstall dialog
   - [x] user walkthrough (2026-11-19): gear menu items, trash dialog, Install → Pause → Resume, focus — all OK
   - [x] DOSBox version… in the gear menu under Boxtron — PASSES after the fix (user, 2026-11-19);
@@ -114,6 +119,8 @@ native page is inactive and the legacy row (`GamePage.tsx`) renders as before.
         so the menu's cache was never filled. Live tool was `boxtron` while `appDetailsStore` still
         said `proton-cachyos-11.0-arm64` (the stale-cache trap). Fixed with GearFacts.
   - [x] gamepad focus walks button → trash → Steam's buttons; nothing lost after a press
-  - [ ] a Steam game: page entirely stock (no Steam game on the Pocket Max card)
-  - [ ] plugin reload twice: no doubled gear-menu items
-  - [ ] a real card (built image, not the hot-deployed bundle)
+  - [x] a Steam game: page entirely stock (user, 2026-11-19)
+  - [x] plugin reload (several today): no doubled gear-menu items (user, 2026-11-19)
+  - [x] a real build (user, 2026-11-19): dev OTA `20261119T105511Z` from `e5d583d` installed on the
+        Pocket Max (slot A, boot-good marked); game pages, gear menu and home's wide header tile
+        all work from it. The image's stores plugin is byte-identical to the hot-deployed one.

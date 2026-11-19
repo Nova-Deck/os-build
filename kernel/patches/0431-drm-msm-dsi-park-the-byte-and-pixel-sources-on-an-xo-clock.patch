@@ -1,0 +1,66 @@
+From: sunshineinabox <aqemail@gmail.com>
+Date: Tue, 17 Nov 2026 06:00:00 +0000
+Subject: [PATCH] drm/msm/dsi: park the byte and pixel sources on an xo clock
+
+The previous patch moves the byte and pixel RCGs back to the parent they
+had at the first link-up before the PHY PLL goes off. When the bootloader
+hands the panel over lit, that parent is the PLL itself and the restore
+does nothing: on the KONKR Pocket FIT Elite both sources still named
+dsi0_phy_pll_out_* through a whole rest.
+
+Take an optional "xo" clock on the controller and park on that instead.
+It is the RCGs' parent 0 (bi_tcxo), where the vendor driver parks them
+before it switches the PLL off (dsi_display_set_clk_src(display, true)),
+and both stock SM8750 device trees give the DSI controllers this clock.
+Without the clock the recorded parent is used as before. A reparent that
+fails is now reported.
+---
+ drivers/gpu/drm/msm/dsi/dsi_host.c | 22 ++++++++++++++++++----
+ 1 file changed, 18 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/gpu/drm/msm/dsi/dsi_host.c b/drivers/gpu/drm/msm/dsi/dsi_host.c
+--- a/drivers/gpu/drm/msm/dsi/dsi_host.c
++++ b/drivers/gpu/drm/msm/dsi/dsi_host.c
+@@ -294,6 +294,7 @@
+ int dsi_clk_init_6g_v2_9(struct msm_dsi_host *msm_host)
+ {
+ 	struct device *dev = &msm_host->pdev->dev;
++	struct clk *xo;
+ 	int ret;
+ 
+ 	ret = dsi_clk_init_6g_v2(msm_host);
+@@ -320,6 +321,17 @@
+ 		return dev_err_probe(dev, PTR_ERR(msm_host->dsi_pll_pixel_clk),
+ 				     "can't get dsi_pll_pixel clock\n");
+ 
++	/*
++	 * Where the two sources rest while the PHY PLL is off. Without it they
++	 * go back to the parent found at the first link-up, which is the PLL
++	 * itself when the bootloader left the panel lit.
++	 */
++	xo = devm_clk_get_optional(dev, "xo");
++	if (IS_ERR(xo))
++		return dev_err_probe(dev, PTR_ERR(xo), "can't get xo clock\n");
++	msm_host->byte_src_parent = xo;
++	msm_host->pixel_src_parent = xo;
++
+ 	return 0;
+ }
+ 
+@@ -2633,10 +2645,12 @@
+ 
+ 	pinctrl_pm_select_sleep_state(&msm_host->pdev->dev);
+ 
+-	if (msm_host->byte_src_parent)
+-		clk_set_parent(msm_host->byte_src_clk, msm_host->byte_src_parent);
+-	if (msm_host->pixel_src_parent)
+-		clk_set_parent(msm_host->pixel_src_clk, msm_host->pixel_src_parent);
++	if (msm_host->byte_src_parent &&
++	    clk_set_parent(msm_host->byte_src_clk, msm_host->byte_src_parent))
++		dev_err(&msm_host->pdev->dev, "Failed to park byte_src\n");
++	if (msm_host->pixel_src_parent &&
++	    clk_set_parent(msm_host->pixel_src_clk, msm_host->pixel_src_parent))
++		dev_err(&msm_host->pdev->dev, "Failed to park pixel_src\n");
+ 
+ 	cfg_hnd->ops->link_clk_disable(msm_host);
+ 	pm_runtime_put(&msm_host->pdev->dev);

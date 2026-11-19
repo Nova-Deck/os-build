@@ -1,0 +1,47 @@
+From: sunshineinabox <aqemail@gmail.com>
+Date: Tue, 17 Nov 2026 05:00:00 +0000
+Subject: [PATCH] ASoC: aw88395: lib: count the profiles from zero on every load
+
+aw88395_dev_cfg_load() runs from the codec drivers' component probe, so
+it runs again whenever the sound card is bound again, while the
+aw_device it fills lives as long as the I2C device. Both header parsers
+count the profiles by incrementing prof_info.count and never clear it,
+so a second load doubles the count. prof_desc is then allocated at
+twice the size and only its first half is filled.
+
+With a V1 header the name list is built from prof_desc, so the second
+half of the names is NULL. The codec's profile control reports twice
+the items, and reading the name of the first extra one passes NULL to
+strscpy():
+
+  Unable to handle kernel NULL pointer dereference at virtual address 0
+  pc : fixup_exception+0xd0/0x160
+   sized_strscpy+0x4c/0xf8 (P)
+   snd_ctl_elem_info+0x58/0x160
+   snd_ctl_elem_info_user+0xfc/0x190
+   snd_ctl_ioctl+0x364/0xb90
+
+Seen on the KONKR Pocket FIT Elite (two AW88261). On a boot where the
+card's first bind was unwound and repeated, "alsactl store" died this
+way at shutdown inside snd_ctl_elem_info(), which holds the card's
+controls lock, and the restart took about four minutes: PipeWire and
+WirePlumber did not exit on SIGKILL.
+
+Clear the count before parsing.
+---
+ sound/soc/codecs/aw88395/aw88395_lib.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/sound/soc/codecs/aw88395/aw88395_lib.c b/sound/soc/codecs/aw88395/aw88395_lib.c
+--- a/sound/soc/codecs/aw88395/aw88395_lib.c
++++ b/sound/soc/codecs/aw88395/aw88395_lib.c
+@@ -1003,6 +1003,9 @@ int aw88395_dev_cfg_load(struct aw_device *aw_dev, struct aw_container *aw_cfg)
+ 	struct aw_cfg_hdr *cfg_hdr;
+ 	int ret;
+
++	/* Loaded again at every component probe; the parsers add to this. */
++	aw_dev->prof_info.count = 0;
++
+ 	cfg_hdr = (struct aw_cfg_hdr *)aw_cfg->data;
+
+ 	switch (cfg_hdr->hdr_version) {

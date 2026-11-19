@@ -1,0 +1,33 @@
+From: sunshineinabox <aqemail@gmail.com>
+Date: Tue, 17 Nov 2026 04:00:00 +0000
+Subject: [PATCH] iommu/arm-smmu-qcom: Add SM8750 MDSS compatible
+
+Add the SM8750 MDSS compatible to the clients list, so it gets an
+identity domain at boot, as SM8550 and SM8650 do since the two previous
+patches.
+
+The bootloader leaves its picture scanning out at kernel entry. Without
+an identity domain the MDSS stream is attached to an empty translating
+domain as soon as the device is added, and its fetches fault until the
+DPU driver stops the timing engine and attaches its own domain. On the
+KONKR Pocket FIT Elite every boot logged, right after "Adding to iommu
+group" and with the group's type DMA-FQ, as many of these as the rate
+limit lets through:
+
+  arm-smmu 15000000.iommu: Unhandled context fault: fsr=0x402,
+  iova=0xfc800100, fsynr=0x7d0021, cbfrsynra=0x800, cb=7
+---
+ drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c b/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c
+--- a/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c
++++ b/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c
+@@ -428,6 +428,7 @@ static const struct of_device_id qcom_smmu_client_of_match[] __maybe_unused = {
+ 	{ .compatible = "qcom,sm8450-mdss" },
+ 	{ .compatible = "qcom,sm8550-mdss" },
+ 	{ .compatible = "qcom,sm8650-mdss" },
++	{ .compatible = "qcom,sm8750-mdss" },
+ 	{ .compatible = "qcom,x1e80100-mdss" },
+ 	{ }
+ };

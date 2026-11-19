@@ -556,6 +556,15 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
         call). Relaunch: `saves: download -> downloaded` into the prefix Proton then built, the
         save restored in game (user-seen), no backup (nothing local); exit `upload -> uploaded`,
         a `--dry-run` `none`. Step 9's "drop the prefix and relaunch" row passes.
+     9. a non-Galaxy cloud game: the only owned candidate (The Witcher EE: cloud saves, no Galaxy
+        DLL in its 2,678 depot files) is 15 GB and the card had 8.3 GB free. So, with the user's
+        OK, Another World's galaxy.json row was hand-set to `comet: false` (the real build, only
+        its input faked; restored byte-identical after). Launch: `none -> nothing`, unit
+        `(no Comet, upload after exit)`; port 9977 had 0 listeners in all 8 samples while the
+        game ran; exit `upload -> uploaded`, `--dry-run` `none`. The game was quit before its
+        first achievement (without Comet it would die there). Still owed: a REAL non-Galaxy
+        title on a card with room (The Witcher EE).
+   **PHASE 3 HW GATE (step 9) PASSED 2026-11-19**, with the one caveat in row 9.
    - **HW to run (with step 7):** the row shows "on, last synced <time>" for Another World; Off
      → a launch and an exit sync nothing (no `game-launch: saves:` line, no upload unit), and
      galaxy.json shows `enabled: false` at once; On again → syncs; a failure (e.g. offline exit)

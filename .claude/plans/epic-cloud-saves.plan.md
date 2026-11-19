@@ -155,6 +155,20 @@ Epic tokens. The picker's location name is the game's title.
 ### Phase 2 — sync
 
 2. **Epic path variables** (TDD, `tests/test-store-savepaths.sh`).
+   **Done 2026-11-19** (`novadeck_savepaths.resolve_epic(location, install, prefix, epic_id)`;
+   the suite went from 25 to 51 checks). Each Epic variable is rewritten as the GOG token or
+   Windows variable for the same folder (`EPIC_VARIABLES`), and resolution continues as for GOG:
+   the registry, `..`, case and containment are shared. Variables match in any case. `{EpicID}`
+   must be one alphanumeric component, or the location is refused. A `%VAR%` or `<?TOKEN?>` in an
+   Epic location is refused, as legendary refuses an unresolved `%`. The checks use real
+   CloudSaveFolder values from the account (DOOM 64, Guacamelee, MYZ, Moving Out, Death Stranding,
+   Torchlight II, Breathedge, Fallout).
+   **New for both stores:** a profile folder that does not exist yet (AppData, Documents, Saved
+   Games under `users/<user>`; Local, LocalLow, Roaming under AppData) takes Windows' spelling.
+   Epic's `{appdata}/../locallow` would otherwise create `locallow` before the first launch. Proton's
+   copy_pfx adds only MISSING files and compares case-sensitively, so it would add `LocalLow` beside
+   it, and Wine would open the exact-case, empty `LocalLow`. This is reasoned from copy_pfx, not
+   seen on HW; the step 9 gate (fresh prefix) checks it on a LocalLow game.
 3. **Epic rows in the plugin** (TDD): `CloudSaveFolder` present/absent, the switch, the install
    folder.
 4. **Pre-launch Epic sync** (TDD, legendary stubbed): each status of design §3, the backup before

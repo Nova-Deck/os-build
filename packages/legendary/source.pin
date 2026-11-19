@@ -13,14 +13,26 @@
 # It is pure Python, so arch=('any') and there is no FEX anywhere in this path — the x86_64
 # artifacts upstream publishes are a convenience for Deck users, not a constraint on us.
 #
+# PATCH 0001 adds `sync-saves --dry-run`: print what a sync would do (legendary's own
+# SaveGameStatus, the save path, each side's newest time, the last sync) as one JSON line per game,
+# and change nothing. Cloud saves need the verdict BEFORE anything moves, because a real sync with
+# -y only logs a conflict, stores --save-path in installed.json, and deletes the local save files
+# before it fetches the cloud's (.claude/plans/epic-cloud-saves.plan.md design §1). Also sent
+# upstream; drop it once a legendary release carries --dry-run. check-dry-run.py (a local source)
+# runs from build() against the patched tree, because the overlay build runs makepkg with --nocheck.
+#
 # Fields (see packages/README.md):
 #   name           pkgname (must match the PKGBUILD); also the work/ build-dir + repo entry
 #   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
 #   pkgrel_suffix  numeric suffix appended to the PKGBUILD's pkgrel so pacman prefers our build
+#   patches        under patches/, applied -p1 right after prepare()'s first cd
+#   local_sources  files the PKGBUILD's own source=() names, staged beside it
 #
 # To bump legendary: edit pkgver + sha256sums in packages/legendary/PKGBUILD, re-audit the runtime
 # imports (the depends list below the header is derived from them, not from install_requires — see
-# the PKGBUILD), and `make relock`.
+# the PKGBUILD), re-check that patch 0001 still applies (or is upstream), and `make relock`.
 name: legendary
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
+patches: 0001-sync-saves-add-dry-run.patch
+local_sources: check-dry-run.py

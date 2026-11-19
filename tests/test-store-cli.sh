@@ -93,6 +93,29 @@ for pkg in legendary gogdl; do
     && ok "$pkg: sources are pinned by sha256" \
     || bad "$pkg: no sha256sums — an upstream retag would go unnoticed"
 
+  # Both carry a sync --dry-run patch that cloud saves depend on, checked at build time by a local
+  # check-dry-run.py. The patch must exist, build-overlay needs a `cd` in prepare() to apply it,
+  # build() must run the check, and the check's pinned sha256 must be the file's: an edit to the
+  # check without the sum fails makepkg's integrity step, far later than here.
+  for patch in $(pin_field "$pin" patches); do
+    [ -f "$PKGDIR/$pkg/patches/$patch" ] \
+      && ok "$pkg: declared patch $patch exists" \
+      || bad "$pkg: source.pin declares patches/$patch, which does not exist"
+  done
+  sed -n '/^prepare()/,/^}/p' "$pkgbuild" | grep -qE '^\s*cd ' \
+    && ok "$pkg: prepare() has the cd build-overlay places the patches after" \
+    || bad "$pkg: no cd in prepare() — build-overlay cannot place the patch step"
+  [ "$(pin_field "$pin" local_sources)" = "check-dry-run.py" ] \
+    && ok "$pkg: check-dry-run.py is a declared local source" \
+    || bad "$pkg: source.pin does not declare check-dry-run.py as a local source"
+  sed -n '/^build()/,/^}/p' "$pkgbuild" | grep -q 'check-dry-run.py' \
+    && ok "$pkg: build() runs check-dry-run.py (the overlay build passes --nocheck)" \
+    || bad "$pkg: build() does not run check-dry-run.py — the --dry-run patch would ship unchecked"
+  check_sum="$(sha256sum "$PKGDIR/$pkg/check-dry-run.py" | cut -d' ' -f1)"
+  pkgbuild_array "$pkgbuild" sha256sums | grep -qx "$check_sum" \
+    && ok "$pkg: sha256sums pins check-dry-run.py as it is" \
+    || bad "$pkg: sha256sums does not carry check-dry-run.py's sum ($check_sum)"
+
   # Every dependency has to resolve. The lock is the list of what the image actually installs, so a
   # name absent from it is a name pacman could not find — which is how gtk2 was learned.
   deps="$(pkgbuild_array "$pkgbuild" depends)"

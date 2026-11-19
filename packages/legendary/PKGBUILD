@@ -30,7 +30,7 @@
 
 pkgname=legendary
 pkgver=0.20.43
-pkgrel=1
+pkgrel=2
 pkgdesc='Free and open-source replacement for the Epic Games Launcher (CLI)'
 arch=('any')
 url='https://github.com/Heroic-Games-Launcher/legendary'
@@ -39,12 +39,23 @@ depends=('python' 'python-requests' 'python-requests-futures' 'python-urllib3'
          'python-filelock' 'python-pycryptodomex')
 makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
 # Bare version tag — the fork tags `0.20.43`, not `v0.20.43`.
-source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/${pkgver}.tar.gz")
-sha256sums=('e41348ad06b804a0123178926d23fbf8b6da0f9ef6c2b407db1f6455ea545111')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/${pkgver}.tar.gz"
+        'check-dry-run.py')
+sha256sums=('e41348ad06b804a0123178926d23fbf8b6da0f9ef6c2b407db1f6455ea545111'
+            '1d6e4c3c24a59e2219c76d5906b91b689faf0e82d711d991eb59680c10c4bb9d')
+
+# Empty on purpose: build-overlay.sh applies source.pin's patches right after the first `cd` in
+# prepare(), and refuses a PKGBUILD that has none.
+prepare() {
+  cd "legendary-${pkgver}"
+}
 
 build() {
   cd "legendary-${pkgver}"
   python -m build --wheel --no-isolation
+  # The --dry-run patch (source.pin) is checked here, not in check(): the overlay build runs
+  # makepkg with --nocheck. Offline (the network calls are stubbed); a failure fails the package.
+  python "${srcdir}/check-dry-run.py" "${PWD}"
 }
 
 package() {

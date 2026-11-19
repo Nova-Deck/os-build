@@ -310,7 +310,8 @@ Current overlay:
   tag. The Epic store CLI for alien-games milestone 1, absent from holo like `f3`. Pure Python, so
   `arch=any` — upstream's x86_64 freeze is a convenience for Deck users and taking it would have
   meant FEX for no reason. `depends` is derived from the package's actual imports, not from
-  `install_requires`; see the PKGBUILD header.
+  `install_requires`; see the PKGBUILD header. Patch `0001` adds `sync-saves --dry-run` for Epic
+  cloud saves, checked at build time by `check-dry-run.py` (see `source.pin`).
 - `gogdl/` — **local PKGBUILD** building gogdl `1.3.0` from its GitHub tag. The GOG CLI, same
   milestone. **The one package here with two sources**: it compiles a mandatory C extension
   (`gogdl_xdelta3`) against a vendored xdelta3 that upstream carries as a git SUBMODULE, and a

@@ -1,0 +1,13 @@
+[Unit]
+Description=novadeck: keep the GPU's gpu-worker thread off the interrupt cores
+Documentation=file:///usr/lib/novadeck/gpu-worker-cpus
+# Nothing waits on this: it moves one kernel thread, and until it runs the thread just keeps the
+# kernel's placement. Type=exec rather than oneshot so its retry window (the GPU can bind after
+# this starts) never holds up multi-user.target.
+
+[Service]
+Type=exec
+ExecStart=/usr/lib/novadeck/gpu-worker-cpus
+
+[Install]
+WantedBy=multi-user.target

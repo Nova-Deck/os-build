@@ -504,6 +504,7 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/pow
 	bash $(TESTS_DIR)/test-coredump-limit.sh
 	bash $(TESTS_DIR)/test-perf.sh
 	bash $(TESTS_DIR)/test-cpu-affinity.sh
+	bash $(TESTS_DIR)/test-gpu-worker-cpus.sh
 	bash $(TESTS_DIR)/test-fan-curve.sh
 	bash $(TESTS_DIR)/test-power-gpu.sh
 	bash $(TESTS_DIR)/test-cpu-scheduler.sh

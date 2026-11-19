@@ -1,0 +1,122 @@
+#!/bin/bash
+# novadeck gpu-worker-cpus — keep msm's gpu-worker thread off the cores that take device interrupts.
+#
+# The boot cmdline pins device interrupts to the little cluster (irqaffinity= in boot/boards.map:
+# 0-2 on SM8550, 0-1 on SM8650 and SM8750), so the Wi-Fi receive softirq of a game stream runs on
+# one of those cores, chosen by a hash of the stream's ports. msm's gpu-worker kthread retires GPU
+# jobs and runs the GPU's devfreq and fence-deadline work. It is SCHED_FIFO with no fixed CPU. When
+# it lands on the receive core it waits behind the softirq, since softirqs run before any thread,
+# and the RT wake-up path does not count softirq load, so once the two meet they stay together for
+# the rest of the stream: missed refreshes roughly triple and the client drops a frame every few
+# seconds. Measured on an SM8550 Odin 2 Portal with the same irqaffinity=0-2 (Moonlight, 119 fps,
+# 6 GHz Wi-Fi): 15 of 16 streams in that state with the thread held on 0-2, 0 of 16 with it on 3-6.
+#
+# So the thread gets every online CPU outside the highest-capacity (prime) cluster, minus the
+# interrupt cores — the same "interactive" reading of the topology as novadeck-cpu-affinity, taken
+# from cpu_capacity, so there is no per-SoC CPU list here. That is 3-6 on SM8550, 2-6 on SM8650 and
+# 2-5 on SM8750. With equal capacities (or none) every online CPU but the interrupt ones qualifies.
+#
+# Where interrupts are not confined (the SM8250 rows carry no irqaffinity, so the mask covers every
+# CPU) there is no interrupt-free core to move it to, and the thread is left alone. Likewise if the
+# interrupt cores cover every candidate.
+#
+# Once is enough. The kernel keeps an affinity set from userspace across CPU hotplug, and the
+# suspend engine's offline/online of CPUs 1-7 was checked on the Odin 3 to leave it in place.
+# The thread appears when msm binds the GPU, which can be after this starts, so a missing thread is
+# looked for again every DELAY seconds, TRIES times; then this gives up quietly. It never fails the
+# boot: every outcome exits 0, with the reason on stderr (the journal).
+set -uo pipefail
+
+# Overridable so tests/test-gpu-worker-cpus.sh can drive this against fabricated trees and a stub.
+SYS=${NOVADECK_SYS_CPU:-/sys/devices/system/cpu}
+PROC=${NOVADECK_PROC:-/proc}
+TASKSET=${NOVADECK_TASKSET:-taskset}
+TRIES=${NOVADECK_GPU_WORKER_TRIES:-30}
+DELAY=${NOVADECK_GPU_WORKER_DELAY:-2}
+
+log() { printf 'gpu-worker-cpus: %s\n' "$*" >&2; }
+
+# "0-3,5,7-8" -> one CPU number per line
+expand() {
+  echo "$1" | tr ',' '\n' | while IFS=- read -r a b; do
+    [ -n "$a" ] || continue
+    [ -n "$b" ] || b=$a
+    for ((i = a; i <= b; i++)); do echo "$i"; done
+  done
+}
+
+# hex affinity mask, comma-grouped in 32-bit words ("00000000,00000007") -> one CPU per line
+mask_cpus() {
+  local v=$((16#${1//,/})) i=0
+  while ((v > 0)); do
+    ((v & 1)) && echo "$i"
+    v=$((v >> 1)); i=$((i + 1))
+  done
+}
+
+# one CPU per line, sorted -> "2-5,7"
+compress() {
+  awk 'NR == 1 { s = p = $1; next }
+       $1 == p + 1 { p = $1; next }
+       { printf "%s%s,", s, (s == p ? "" : "-" p); s = p = $1 }
+       END { if (NR) printf "%s%s", s, (s == p ? "" : "-" p) }'
+}
+
+# The CPU list, or empty when the thread should be left alone (reason logged).
+target_cpus() {
+  local online irq caps max c
+  online=$(expand "$(cat "$SYS/online" 2>/dev/null)")
+  [ -n "$online" ] || { log "no $SYS/online"; return; }
+  irq=$(mask_cpus "$(cat "$PROC/irq/default_smp_affinity" 2>/dev/null || echo 0)")
+
+  if [ -z "$(comm -23 <(echo "$online" | sort) <(echo "$irq" | sort))" ]; then
+    log "interrupts are not confined to a subset of the CPUs; leaving gpu-worker alone"
+    return
+  fi
+
+  caps=""
+  for c in $online; do
+    [ -r "$SYS/cpu$c/cpu_capacity" ] || { caps=""; break; }
+    caps+="$c $(cat "$SYS/cpu$c/cpu_capacity")"$'\n'
+  done
+  if [ -n "$caps" ]; then
+    max=$(printf '%s' "$caps" | awk '{print $2}' | sort -n | tail -1)
+    if [ "$(printf '%s' "$caps" | awk '{print $2}' | sort -u | wc -l)" -gt 1 ]; then
+      online=$(printf '%s' "$caps" | awk -v m="$max" '$2 != m {print $1}')
+    fi
+  fi
+
+  c=$(comm -23 <(echo "$online" | sort) <(echo "$irq" | sort) | sort -n | compress)
+  [ -n "$c" ] || log "every candidate CPU takes interrupts; leaving gpu-worker alone"
+  echo "$c"
+}
+
+find_thread() {
+  local f
+  for f in "$PROC"/[0-9]*/comm; do
+    [ "$(cat "$f" 2>/dev/null)" = gpu-worker ] && { basename "$(dirname "$f")"; return; }
+  done
+}
+
+cpus=$(target_cpus)
+[ -n "$cpus" ] || exit 0
+
+for ((try = 1; try <= TRIES; try++)); do
+  pid=$(find_thread)
+  if [ -n "$pid" ]; then
+    now=$(sed -n 's/^Cpus_allowed_list:[[:space:]]*//p' "$PROC/$pid/status" 2>/dev/null)
+    if [ "$now" = "$cpus" ]; then
+      log "gpu-worker (pid $pid) already on CPUs $cpus"
+      exit 0
+    fi
+    if "$TASKSET" -pc "$cpus" "$pid" >/dev/null; then
+      log "gpu-worker (pid $pid): CPUs $now -> $cpus"
+    else
+      log "taskset failed for gpu-worker (pid $pid)"
+    fi
+    exit 0
+  fi
+  ((try < TRIES)) && sleep "$DELAY"
+done
+log "no gpu-worker thread after $TRIES tries (GPU not bound?); nothing placed"
+exit 0

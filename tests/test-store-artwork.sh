@@ -40,9 +40,13 @@ def bad(m): print(f"  FAIL {m}")
 
 from novadeck_stores import artwork
 
-# -- kind -> ELibraryAssetType (Capsule 0, Hero 1, Logo 2) --
-(ok if artwork.KIND_ASSET == {"capsule": 0, "hero": 1, "logo": 2} else bad)(
-    f"the three kinds map to the library asset types ({artwork.KIND_ASSET})")
+# -- kind -> ELibraryAssetType (Capsule 0, Hero 1, Logo 2, Header 3) --
+# Header is the wide capsule Steam's home shows for a recent game (grid `<appid>.jpg`). Without it
+# a shortcut's recent tile is a plain blue card with its name (HW Pocket Max 2026-11-19). The
+# numbers are Steam's own: its flatpak artwork code sets library_capsule 0, library_hero 1,
+# library_logo_transparent 2, store_capsule_main 3 (client 1792618285).
+(ok if artwork.KIND_ASSET == {"capsule": 0, "hero": 1, "logo": 2, "header": 3} else bad)(
+    f"the four kinds map to the library asset types ({artwork.KIND_ASSET})")
 
 # -- Epic: read legendary's cached metadata from OUR store home, pick by priority --
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="store-artwork."))
@@ -60,6 +64,9 @@ urls = artwork.epic_urls("Alba", p)
     f"Epic capsule prefers DieselGameBoxTall ({urls.get('capsule')})")
 (ok if urls.get("hero") == "https://cdn/wide.jpg" else bad)(f"Epic hero is the wide box ({urls.get('hero')})")
 (ok if "logo" not in urls else bad)("a non-https logo url is dropped, not set (http was offered)")
+# Epic's logo is a transparent title, no backdrop: its wide image is the box art with the title.
+(ok if urls.get("header") == "https://cdn/wide.jpg" else bad)(
+    f"Epic header is the wide box art, not the transparent logo ({urls.get('header')})")
 (ok if artwork.epic_urls("Missing", p) == {} else bad)("a game with no metadata yields no urls, never raises")
 
 # -- GOG: one unauthenticated GamesDB GET, injected --
@@ -78,6 +85,10 @@ gurls = artwork.gog_urls("1207658924", fetch_json=fake_json)
 (ok if gurls.get("capsule") == "https://gog/cover.jpg" and gurls.get("hero") == "https://gog/bg.jpg"
     and gurls.get("logo") == "https://gog/lg.png" else bad)(
     f"GOG expands url_format (formatter empty = full size, ext per kind) ({gurls})")
+# GOG's GamesDB "logo" is the titled art Steam shows over the hero on the game page; the user
+# picked it for home's wide tile (2026-11-19). `horizontal_artwork` is the backdrop, no title.
+(ok if gurls.get("header") == "https://gog/lg.png" else bad)(
+    f"GOG header is the GamesDB logo, the titled art on the game page ({gurls.get('header')})")
 
 # -- download: https-only, size-capped, magic-byte validated --
 class FakeResp:

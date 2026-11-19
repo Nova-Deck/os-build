@@ -9,25 +9,31 @@ import {
   DialogButton,
   findInReactTree,
   Focusable,
-  Navigation,
   playSectionClasses,
   showModal,
 } from "@decky/ui";
 import { Component, useEffect, useRef, useState } from "react";
-import {
-  getCloudSaves,
-  getDosVersions,
-  getGameState,
-  getInstallSize,
-  installTile,
-  setCloudSaves,
-  stopInstall,
-  uninstallGame,
-} from "./backend";
+import { installTile, setCloudSaves, stopInstall, uninstallGame } from "./backend";
 import { showDosVersionSetting } from "./DosVersionDialog";
-import { STORE_LABELS, type CloudSaves, type DosVersions, type OurPage, type PageState } from "./types";
+import {
+  cloudLines,
+  runAction,
+  useCloudSaves,
+  useDosVersions,
+  useFollowReplacement,
+  useInstallSize,
+  useOnBoxtron,
+  type Outcome,
+} from "./lib/pageHooks";
+import { refreshPageState, usePageState } from "./lib/pageState";
+import { isNativePageActive } from "./NativePage";
+import { STORE_LABELS, type CloudSaves, type DosVersions, type OurPage } from "./types";
 import { confirmUninstall } from "./UninstallDialog";
 
+// THE LEGACY ROW. Steam's own page, steered with our state (NativePage.tsx), is the game page now;
+// this row only renders while that could not be patched on this client (isNativePageActive false),
+// so a Steam update that moves one of its seams still leaves an install surface on the page.
+//
 // Milestone 7 revision 2, R1: the install surface is Steam's OWN game page. For one of our
 // not-installed entries the page's Play row is replaced by Install / progress + Stop / Resume +
 // Remove; for an installed one Steam's native Play stays and an Uninstall row is added. The stub
@@ -46,27 +52,12 @@ const ROUTE = "/library/app/:appid";
 // Every non-Steam shortcut's appid has the top bit set, so a Steam game's page is left alone
 // without a backend round trip. A pre-filter only: ours or not is the registry's answer.
 const SHORTCUT_BIT = 0x80000000;
-const POLL_MS = 2000;
-const CLOUD_POLL_MS = 10000;
 const GB = 1024 ** 3;
 
 type Node = { key?: unknown; props?: { className?: unknown; children?: unknown; [k: string]: unknown } };
 type PatchedFn = ((...args: unknown[]) => unknown) & { __novadeckPatched?: boolean };
 
 const pageMarker = (appid: number) => `novadeck-page-${appid}`;
-
-// The internal compat_tools name packages/boxtron installs (its PKGBUILD asserts it), and the
-// live tool Steam has mapped for an app — the page's own details, which Steam keeps loaded and
-// current while the page is open. Empty when unknown: no button, never a wrong one.
-const BOXTRON_TOOL = "boxtron";
-function compatToolOf(appid: number): string {
-  try {
-    const details: any = (window as any).appDetailsStore?.GetAppDetails?.(appid);
-    return String(details?.strCompatToolName || "");
-  } catch (error) {
-    return "";
-  }
-}
 
 function classOf(node: unknown): string {
   const cn = (node as Node | null)?.props?.className;
@@ -86,6 +77,9 @@ function overviewOf(tree: unknown): { appid: number } | undefined {
 }
 
 function inject(ret: unknown) {
+  // Steam's own button and play bar carry our state: nothing to hide, nothing to add. Read on every
+  // render, so a native seam failing mid-session brings this row back on the next one.
+  if (isNativePageActive()) return;
   const appid = overviewOf(ret)?.appid;
   if (typeof appid !== "number" || (appid >>> 0) < SHORTCUT_BIT) return;
   const unsigned = appid >>> 0;
@@ -197,11 +191,6 @@ const rowCss = `
   }
 `;
 
-// The last answer per page and the size per game, kept across mounts: a revisit shows its row
-// (and hides Steam's Play) at once, not one round trip later.
-const lastState = new Map<number, PageState>();
-const sizes = new Map<string, number | null>();
-
 function gb(bytes: number) {
   return `${(bytes / GB).toFixed(1)} GB`;
 }
@@ -240,155 +229,24 @@ class RowBoundary extends Component<{ children: React.ReactNode }, { failed: boo
   }
 }
 
-// Every action's answer, flattened as in Library.tsx: a refusal and anything worth saying is
-// toasted, a silent success just re-reads the row.
-type Outcome = {
-  error?: string;
-  ok?: boolean;
-  message?: string;
-  warning?: string;
-  stopped?: boolean;
-  uninstalled?: boolean;
-};
-
 function PlayRow({ appid }: { appid: number }) {
-  // `state` is the last GOOD answer and `err` the latest failure, kept apart: one failed poll
-  // must not drop the row and bring Steam's Play back (or re-grab focus when it recovers).
-  const [state, setState] = useState<PageState | null>(lastState.get(appid) ?? null);
-  const [err, setErr] = useState<string | null>(null);
+  // The page's state is shared with the rest of the page (lib/pageState.ts): the last GOOD answer
+  // and the latest failure, kept apart, so one failed poll does not drop the row and bring Steam's
+  // Play back (or re-grab focus when it recovers).
+  const { page, err, version } = usePageState(appid);
   const [busy, setBusy] = useState(false);
-  const [tick, setTick] = useState(0);
-  const token = useRef<string | undefined>(undefined);
-  const movedTo = useRef<number | undefined>(undefined);
   const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    let live = true;
-    let timer = 0;
-    const read = async () => {
-      try {
-        const s = await getGameState(appid, token.current);
-        if (!live) return;
-        if ("error" in s) {
-          setErr(s.error);
-        } else {
-          setErr(null);
-          if (s.ours) {
-            token.current = s.token;
-            // The entry's live appid is not this page's. The install transitions now edit in
-            // place and keep the appid, so this is only an entry an earlier build REPLACED
-            // (remove + re-add): move to the one that is there now. A push, not a replace
-            // (Steam's router offers none), so Back passes the dead page once. Polling goes on,
-            // so if the move never lands this row still shows the live entry's state.
-            // Only once Steam has the new entry's overview: a page opened before that is sent
-            // straight home (HW 2026-10-22). Until then the next poll tries again.
-            const ready = !!(window as any).appStore?.GetAppOverviewByAppID?.(s.appid);
-            if (s.appid !== appid && movedTo.current !== s.appid && ready) {
-              movedTo.current = s.appid;
-              Navigation.Navigate(`/library/app/${s.appid}`);
-            }
-          }
-          lastState.set(appid, s);
-          setState(s);
-          // Someone else's shortcut stays someone else's: a sync adds new appids, it never takes
-          // over an existing one, so there is nothing to keep asking.
-          if (!s.ours && token.current === undefined) return;
-        }
-      } catch (e) {
-        if (live) setErr(String(e));
-      }
-      if (live) timer = window.setTimeout(read, POLL_MS);
-    };
-    read();
-    return () => {
-      live = false;
-      window.clearTimeout(timer);
-    };
-  }, [appid, tick]);
-
-  const page = state && "ours" in state && state.ours ? state : null;
-  const sizeKey = page ? page.token : "";
-  const [size, setSize] = useState<number | null | undefined>(sizes.get(sizeKey));
-  const wantsSize = page !== null && (page.state === "install" || page.state === "paused");
-  useEffect(() => {
-    if (!wantsSize || sizes.has(sizeKey)) {
-      setSize(sizes.get(sizeKey));
-      return;
-    }
-    let live = true;
-    getInstallSize(page.store, page.id)
-      .then((r) => {
-        const v = "error" in r ? null : r.disk_size;
-        if ("error" in r) sizes.delete(sizeKey);
-        else sizes.set(sizeKey, v);
-        if (live) setSize(v);
-      })
-      .catch(() => live && setSize(null));
-    return () => {
-      live = false;
-    };
-  }, [sizeKey, wantsSize]);
+  useFollowReplacement(appid, page);
+  const size = useInstallSize(page);
 
   // boxtron-dos phase 3: an installed GOG DOS title with several DOSBox versions gets a "DOSBox
   // version" button — but only while its compat tool IS Boxtron. Under Proton the choice does
-  // nothing (GOG's own launcher asks), so offering it there was a setting with no effect. The
-  // versions are read once per install state (and after a change).
-  //
-  // The tool is SUBSCRIBED to, not polled: appDetailsStore's copy is only refreshed while some
-  // page holds a details subscription, so a poll of it kept the old tool after a switch in
-  // Properties -> Compatibility until another game page was opened (HW 2026-11-17, Pocket FIT).
-  // RegisterForAppDetails pushes the change itself.
+  // nothing (GOG's own launcher asks), so offering it there was a setting with no effect.
+  // gog-comet phase 3 step 8: its "Cloud saves" switch and lines.
   const installed = page !== null && page.state === "installed";
-  const [dos, setDos] = useState<DosVersions | null>(null);
-  const [onBoxtron, setOnBoxtron] = useState(() => compatToolOf(appid) === BOXTRON_TOOL);
-  useEffect(() => {
-    if (!installed) return;
-    setOnBoxtron(compatToolOf(appid) === BOXTRON_TOOL);
-    let sub: { unregister?: () => void } | undefined;
-    try {
-      sub = (window as any).SteamClient?.Apps?.RegisterForAppDetails?.(appid, (details: any) =>
-        setOnBoxtron(String(details?.strCompatToolName || "") === BOXTRON_TOOL),
-      );
-    } catch (error) {
-      sub = undefined;
-    }
-    return () => sub?.unregister?.();
-  }, [appid, installed]);
-  useEffect(() => {
-    if (!installed) {
-      setDos(null);
-      return;
-    }
-    let live = true;
-    getDosVersions(appid)
-      .then((v) => live && setDos(v))
-      .catch(() => live && setDos(null));
-    return () => {
-      live = false;
-    };
-  }, [appid, installed, tick]);
-
-  // gog-comet phase 3 step 8: an installed GOG game's "Cloud saves" row, read once per install
-  // state, after every action (`tick`), and every CLOUD_POLL_MS: the upload after a game exits
-  // lands seconds after the page is back, and its time and any failure must show without a reopen.
-  const [cloud, setCloud] = useState<CloudSaves | null>(null);
-  useEffect(() => {
-    if (!installed) {
-      setCloud(null);
-      return;
-    }
-    let live = true;
-    const read = () =>
-      getCloudSaves(appid)
-        .then((c) => live && setCloud(c))
-        .catch(() => live && setCloud(null));
-    read();
-    const timer = window.setInterval(read, CLOUD_POLL_MS);
-    return () => {
-      live = false;
-      window.clearInterval(timer);
-    };
-  }, [appid, installed, tick]);
+  const onBoxtron = useOnBoxtron(appid, installed);
+  const dos = useDosVersions(appid, installed, version);
+  const cloud = useCloudSaves(appid, installed, version);
 
   const hidesPlay = page !== null && page.state !== "installed";
   useFocusOnMount(ref, hidesPlay);
@@ -400,14 +258,9 @@ function PlayRow({ appid }: { appid: number }) {
   const run = async (fn: () => Promise<Outcome>) => {
     setBusy(true);
     try {
-      const res = await fn();
-      const body = res.error ?? res.warning ?? (res.ok === false ? `Not installed: ${res.message}` : res.message);
-      if (body) toaster.toast({ title: page.title, body });
-    } catch (e) {
-      toaster.toast({ title: page.title, body: String(e) });
+      await runAction(appid, page.title, fn);
     } finally {
       setBusy(false);
-      setTick((t) => t + 1);
       // The pressed button disabled itself while busy, which drops focus to the document: with
       // nothing focused the gamepad drives nothing until the stick is moved (HW 2026-10-22).
       // Restored only when focus is still nowhere, never taken back from where the user went.
@@ -428,7 +281,7 @@ function PlayRow({ appid }: { appid: number }) {
         run={run}
         dos={onBoxtron ? dos : null}
         cloud={cloud}
-        refresh={() => setTick((t) => t + 1)}
+        refresh={() => refreshPageState(appid)}
       />
       {err ? <span className="novadeck-play-note">{`Could not refresh: ${err}`}</span> : null}
     </Focusable>
@@ -444,22 +297,6 @@ type BodyProps = {
   cloud: CloudSaves | null;
   refresh: () => void;
 };
-
-const NO_CLOUD: Record<"no-client" | "unknown" | "unsupported", string> = {
-  "no-client": "No cloud saves: this install names no GOG Galaxy client",
-  unknown: "Cloud saves: not known yet (GOG could not be reached; checked again at the next library sync)",
-  unsupported: "No cloud saves for this game on GOG",
-};
-
-// The "Cloud saves" lines under the row: the switch's state, the last sync, and what the last
-// sync could not do (cloud_saves.py words it).
-function cloudLines(cloud: CloudSaves | null): string[] {
-  if (!cloud || cloud.state === "none") return [];
-  if (cloud.state === "unavailable") return [NO_CLOUD[cloud.why]];
-  if (cloud.state === "off") return ["Cloud saves: off, saves stay on this device", ...cloud.notes];
-  const last = cloud.lastSync ? `last synced ${new Date(cloud.lastSync * 1000).toLocaleString()}` : "not synced yet";
-  return [`Cloud saves: on, ${last}`, ...cloud.notes];
-}
 
 function Meta({ lines }: { lines: (string | null | undefined)[] }) {
   return (

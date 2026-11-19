@@ -50,6 +50,13 @@ AW, NOCID, UNKNOWN, NONE = "2588025602", "11", "12", "13"
 TOKEN = "gog:1207658845"
 CID = "49843177965810898"
 LOCS = [{"name": "saves", "location": "<?DOCUMENTS?>/Another World"}]
+# Master of Magic Classic (HW 2026-11-19): GOG's remote config enables cloud storage at
+# <?INSTALL?>/cloud_saves, but the install has no such folder and nothing in it names one, and
+# GOG's store lists no "Cloud saves" for it. GOG's DOSBox classics that DO sync ship that folder.
+DOS = "14"
+DOS_DIR = tmp / "Master of Magic"
+DOS_DIR.mkdir()
+DOS_LOCS = [{"name": "saves", "location": "<?INSTALL?>/cloud_saves"}]
 def rows(enabled=True):
     return {
         AW: {"token": TOKEN, "gid": "1207658845", "clientId": CID, "comet": True, "install": "/g/aw",
@@ -59,7 +66,9 @@ def rows(enabled=True):
         UNKNOWN: {"token": "gog:12", "gid": "12", "clientId": "12", "comet": False, "install": "/g/12",
                   "cloud": None},
         NONE: {"token": "gog:13", "gid": "13", "clientId": "13", "comet": False, "install": "/g/13",
-               "cloud": {"supported": False, "enabled": False, "locations": []}}}
+               "cloud": {"supported": False, "enabled": False, "locations": []}},
+        DOS: {"token": "gog:14", "gid": "14", "clientId": "14", "comet": False, "install": str(DOS_DIR),
+              "cloud": {"supported": True, "enabled": enabled, "locations": DOS_LOCS}}}
 def write_galaxy(table):
     (tmp / galaxy.FILENAME).write_text(json.dumps(table))
 write_galaxy(rows())
@@ -79,6 +88,25 @@ check(cloud_saves.page(p, UNKNOWN) == {"state": "unavailable", "why": "unknown"}
       "GOG's config not fetched yet (offline): unavailable, and that it is not KNOWN yet, not 'none'")
 check(cloud_saves.page(p, NONE) == {"state": "unavailable", "why": "unsupported"},
       "GOG has no cloud saves for the game: unavailable, and why")
+check(cloud_saves.page(p, DOS) == {"state": "unavailable", "why": "unsupported"},
+      f"a DOSBox classic whose only location is an install cloud_saves it does not have: no cloud saves "
+      f"({cloud_saves.page(p, DOS)})")
+check("error" in cloud_saves.set_enabled(p, DOS, False),
+      "and no switch to flip for it")
+(DOS_DIR / "cloud_saves").mkdir()
+check(cloud_saves.page(p, DOS)["state"] == "on",
+      "the install HAS that folder (a classic GOG wired up, or saves restored into it): on, read live")
+(DOS_DIR / "cloud_saves").rmdir()
+rows_other = rows()
+rows_other[DOS]["cloud"]["locations"] = [{"name": "saves", "location": "<?INSTALL?>/saves"}]
+write_galaxy(rows_other)
+check(cloud_saves.page(p, DOS)["state"] == "on",
+      "any other install location is trusted even before it exists (a game creates its save folder on first save)")
+rows_mixed = rows()
+rows_mixed[DOS]["cloud"]["locations"] = DOS_LOCS + LOCS
+write_galaxy(rows_mixed)
+check(cloud_saves.page(p, DOS)["state"] == "on", "one real location besides it is enough: on")
+write_galaxy(rows())
 
 print("== on, off, and when it last synced")
 check(cloud_saves.page(p, AW) == {"state": "on", "lastSync": None, "notes": []},

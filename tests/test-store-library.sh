@@ -56,16 +56,22 @@ got = ls.to_shelve("epic", titles, registry)
 (ok if ls.to_shelve("epic", titles, {f"epic:{t['id']}": {} for t in got} | registry) == [] else bad)(
     "a second sync adds nothing — re-sync is idempotent")
 
-# Which tiles a sync asks art for: every entry of the store with no `art` on its row.
+# Which tiles a sync asks art for: every entry of the store with no `art` on its row, and every
+# entry whose art was set by an older revision of the artwork pass (`art_rev`): adding a kind
+# (the wide header, 2026-11-19) re-fetches every tile once, then never again.
+from novadeck_stores import artwork
+REV = artwork.ART_REV
 reg_art = {"epic:New": {"appid": 1, "title": "New", "state": "shelf"},
-           "epic:Done": {"appid": 2, "title": "Done", "state": "shelf", "art_ok": ["capsule", "hero"]},
+           "epic:Done": {"appid": 2, "title": "Done", "state": "shelf", "art_ok": ["capsule", "hero"], "art_rev": REV},
+           "epic:Old": {"appid": 6, "title": "Old", "state": "shelf", "art_ok": ["capsule", "hero", "logo"]},
            "epic:Failed": {"appid": 3, "title": "Failed", "art_ok": []},
            "epic:Inst": {"appid": 4, "title": "Inst", "exe": "/g/i", "platform": "windows"},
            "gog:G": {"appid": 5, "title": "G"},
            "epic:Junk": {"title": "no appid"}}
 want = ls.wanting_art("epic", reg_art)
-(ok if want == [("New", 1), ("Failed", 3), ("Inst", 4)] else bad)(
-    f"tiles without art, a failed fetch and an installed entry included, that store only ({want})")
+(ok if want == [("New", 1), ("Old", 6), ("Failed", 3), ("Inst", 4)] else bad)(
+    f"tiles without art, art from an older revision, a failed fetch and an installed entry, that store only ({want})")
+(ok if REV >= 2 else bad)(f"the header kind bumped the artwork revision past the pre-header rows ({REV})")
 (ok if ls.wanting_art("epic", {}) == [] else bad)("an empty registry wants no art")
 
 (ok if not hasattr(ls, "collection_ops") else bad)("nothing builds collections — the library tabs list the games")
@@ -136,6 +142,10 @@ reg = json.loads((tmp / "shortcuts.json").read_text())
     f"each tile is a shelf row with the appid Steam returned ({reg})")
 (ok if all(r.get("art_ok") == ["capsule", "hero"] for r in reg.values()) else bad)(
     f"art that took is recorded on the row, by kind ({reg})")
+from novadeck_stores import artwork
+REV = artwork.ART_REV
+(ok if all(r.get("art_rev") == REV for r in reg.values()) else bad)(
+    f"and with the revision of the pass that set it ({reg})")
 adds = [pl for e, pl in emitted if e == "shortcut_op" and pl["op"] == "add"]
 (ok if all(a["exe"] == "/usr/lib/novadeck/store-launch" and a["options"] == f"epic:{a['name'][0]}" for a in adds) else bad)(
     f"tiles run the stub with their token ({[(a['exe'], a['options']) for a in adds]})")
@@ -176,6 +186,18 @@ art.clear()
 res = asyncio.run(run("epic"))
 (ok if not art else bad)(f"a settled library fetches nothing on sync ({art})")
 (ok if "warning" not in res else bad)(f"and its toast carries no art warning ({res})")
+
+# A tile whose art an OLDER pass set (no header then) is asked once more, and is settled after.
+reg = json.loads(reg_path.read_text())
+reg["epic:A"].pop("art_rev")
+reg_path.write_text(json.dumps(reg))
+art.clear()
+asyncio.run(run("epic"))
+(ok if [g for g, _ in art] == ["A"] and json.loads(reg_path.read_text())["epic:A"].get("art_rev") == REV else bad)(
+    f"an older revision's art is fetched again once and recorded at this revision ({art})")
+art.clear()
+asyncio.run(run("epic"))
+(ok if not art else bad)(f"after which the library is settled again ({art})")
 
 # Two syncs back to back do not queue the same tiles twice: one pass per store at a time.
 reg = json.loads(reg_path.read_text())
@@ -472,8 +494,10 @@ main.launch.resolve_target = real_resolve
 
 # A failed swap back to the shelf after an uninstall is marked and retried by the next sync.
 emitted.clear()
+from novadeck_stores import artwork
+REV = artwork.ART_REV
 reg_path.write_text(json.dumps({"gog:H": {"appid": 800, "title": "Hotel", "exe": "/g/H/h.exe", "platform": "windows",
-                                          "art_ok": ["capsule"]}}))
+                                          "art_ok": ["capsule"], "art_rev": REV}}))
 refuse.add("edit")
 res = asyncio.run(plugin.uninstall("gog", "H"))
 refuse.clear()
@@ -484,7 +508,7 @@ art_calls.clear()
 asyncio.run(plugin.sync_library("gog"))
 (ok if shortcuts.is_shelf(reg()["gog:H"]) and reg()["gog:H"]["appid"] == 800 else bad)(
     f"the next sync finishes the edit back to the shelf, same appid ({reg()['gog:H']})")
-(ok if reg()["gog:H"].get("art_ok") == ["capsule"] and not art_calls else bad)(
+(ok if reg()["gog:H"].get("art_ok") == ["capsule"] and reg()["gog:H"].get("art_rev") == REV and not art_calls else bad)(
     f"the edit in place keeps the art record, so the sync does not fetch it again ({reg()['gog:H']}, {art_calls})")
 
 # A SteamUI that does not answer ends the sync at the first timeout instead of N x 30 s.

@@ -636,7 +636,7 @@ class Plugin:
             row = registry.get(token)
             if not isinstance(row, dict) or shortcuts._u32(row.get("appid")) != appid:
                 return
-            registry[token] = {**row, "art_ok": list(kinds)}
+            registry[token] = {**row, "art_ok": list(kinds), "art_rev": artwork.ART_REV}
             if not await asyncio.to_thread(shortcuts.write_registry, p, registry):
                 decky.logger.info(f"artwork {token}: applied, but the registry could not record it")
 
@@ -957,7 +957,8 @@ class Plugin:
         # or the next sync fetches it all again.
         registry[token] = {**new_row, "appid": appid,
                            **({"retired": old["retired"]} if old.get("retired") else {}),
-                           **({"art_ok": old["art_ok"]} if old.get("art_ok") else {})}
+                           **({"art_ok": old["art_ok"]} if old.get("art_ok") else {}),
+                           **({"art_rev": old["art_rev"]} if old.get("art_rev") else {})}
         if not await asyncio.to_thread(shortcuts.write_registry, p, registry):
             # The entry is already the new kind; the registry still says the old one, and the
             # pass that called this re-runs the (idempotent) edit next time.

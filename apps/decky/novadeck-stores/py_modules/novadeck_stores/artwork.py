@@ -21,9 +21,17 @@ import urllib.request
 
 from novadeck_stores import status
 
-# kind -> ELibraryAssetType (App.ts: Capsule 0, Hero 1, Logo 2). Icon/Header/HeroBlur are not
-# sourced this milestone — the capsule is what prevents a broken tile.
-KIND_ASSET = {"capsule": 0, "hero": 1, "logo": 2}
+# kind -> ELibraryAssetType. Steam's own flatpak artwork code sets library_capsule 0,
+# library_hero 1, library_logo_transparent 2, store_capsule_main 3 (client 1792618285). The header
+# (3, grid `<appid>.jpg`) is the wide capsule home shows for a recent game: without it a
+# shortcut's recent tile is a plain blue card with its name (HW Pocket Max 2026-11-19).
+# Icon/HeroBlur are not sourced.
+KIND_ASSET = {"capsule": 0, "hero": 1, "logo": 2, "header": 3}
+
+# The revision of the set of kinds above. A row's `art_rev` says which revision set its art; a row
+# from an older one is fetched again once (library_sync.wanting_art), so a new kind reaches the
+# tiles that already had art, and is never asked for again after.
+ART_REV = 2
 
 # A download is untrusted input from a store CDN. See fetch_image.
 MAX_BYTES = 8 * 1024 * 1024
@@ -41,10 +49,14 @@ _EPIC_PRIORITY = {
     "capsule": ("DieselGameBoxTall", "OfferImageTall", "DieselStoreFrontTall", "Thumbnail"),
     "hero": ("DieselGameBox", "DieselGameBoxWide", "OfferImageWide"),
     "logo": ("DieselGameBoxLogo", "ProductLogo"),
+    # Epic's logo is a transparent title with no backdrop: the wide tile is the box art, title on.
+    "header": ("OfferImageWide", "DieselGameBox", "DieselGameBoxWide"),
 }
-# GOG GamesDB field per kind, with the extension its url_format expands to.
+# GOG GamesDB field per kind, with the extension its url_format expands to. The header is the
+# logo: GOG's is the titled art Steam draws over the hero on the game page, and the user picked it
+# for home's wide tile (2026-11-19). `horizontal_artwork` is the untitled backdrop (= background).
 _GOG_FIELD = {"capsule": ("vertical_cover", "jpg"), "hero": ("background", "jpg"),
-              "logo": ("logo", "png")}
+              "logo": ("logo", "png"), "header": ("logo", "png")}
 
 
 def _https(url):

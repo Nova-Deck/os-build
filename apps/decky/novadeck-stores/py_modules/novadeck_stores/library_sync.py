@@ -11,7 +11,7 @@ a title with a registry row — shelf tile or installed entry — is never added
 A title the store says cannot be installed (an Epic ThirdPartyManagedApp: no Epic assets at all,
 library.py) gets no tile. A tile exists to be pressed, and pressing that one could only fail.
 """
-from novadeck_stores import locations, shortcuts
+from novadeck_stores import artwork, locations, shortcuts
 
 
 def to_shelve(store, titles, registry):
@@ -37,10 +37,15 @@ def wanting_art(store, registry):
     a SteamUI that was not listening yet -- is asked for again by the next sync instead of
     keeping its name tile (or a blank tile with a backdrop) for good. Both stores' sources
     are cheap to re-ask (Epic: legendary's local cache; GOG: one unauthenticated GET per tile),
-    but only tiles WITHOUT art are, so a settled library costs a sync nothing."""
+    but only tiles WITHOUT art are, so a settled library costs a sync nothing.
+
+    Art set by an older revision of the pass (`art_rev` below artwork.ART_REV, or none: the rows
+    from before the wide header) counts as wanting: a new kind reaches every tile once."""
     out = []
     for token, row in registry.items():
-        if not token.startswith(f"{store}:") or not isinstance(row, dict) or row.get("art_ok"):
+        if not token.startswith(f"{store}:") or not isinstance(row, dict):
+            continue
+        if row.get("art_ok") and row.get("art_rev", 1) >= artwork.ART_REV:
             continue
         appid = shortcuts._u32(row.get("appid"))
         if appid is not None:

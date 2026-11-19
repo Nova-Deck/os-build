@@ -85,6 +85,26 @@ def _row(p, appid):
     return row if isinstance(row, dict) and isinstance(row.get("token"), str) else None
 
 
+# GOG's DOSBox classics sync `<install>/cloud_saves`, a folder their installer ships and their
+# DOSBox config writes saves into. GOG's remote config also enables that location for classics it
+# never wired up: Master of Magic Classic's install has no such folder and nothing names one, and
+# GOG's store lists no "Cloud saves" for it (HW 2026-11-19). Such a game has no cloud saves.
+INSTALL_CLOUD_SAVES = "<?INSTALL?>/cloud_saves"
+
+
+def _only_absent_install_folder(row, cloud):
+    """Every location is the install's cloud_saves, and the install has no such folder. Read live,
+    so a folder that appears (saves restored into it) brings the switch back. Any other location
+    is trusted even before it exists: a game creates its save folder on its first save."""
+    locations = cloud.get("locations") or []
+    install = row.get("install")
+    if not locations or not isinstance(install, str) or not install:
+        return False
+    if any(loc.get("location", "").lower() != INSTALL_CLOUD_SAVES.lower() for loc in locations):
+        return False
+    return not os.path.isdir(os.path.join(install, "cloud_saves"))
+
+
 def _state(row):
     """(state, why) from a galaxy.json row."""
     cloud = row.get("cloud")
@@ -92,7 +112,7 @@ def _state(row):
         return "unavailable", "no-client"
     if not isinstance(cloud, dict):
         return "unavailable", "unknown"
-    if cloud.get("supported") is not True:
+    if cloud.get("supported") is not True or _only_absent_install_folder(row, cloud):
         return "unavailable", "unsupported"
     return ("on" if cloud.get("enabled") is True else "off"), None
 

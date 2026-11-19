@@ -550,6 +550,12 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
         query strings cut, since gogdl's token refresh puts the client secret there). Installed as
         OTA bundle 20261119T093248Z (rauc, slot B, /home kept); offline again, the page read
         "GOG could not be reached". Step 9's offline row passes.
+     8. drop the prefix (2026-11-19, OTA build 20261119T093248Z): `compatdata/2361001888` (416 MB)
+        removed the way prefixes.drop does it (`rm -rf --one-file-system` as deck), the game
+        install kept; the offline sessions' local progress was knowingly given up (the user's
+        call). Relaunch: `saves: download -> downloaded` into the prefix Proton then built, the
+        save restored in game (user-seen), no backup (nothing local); exit `upload -> uploaded`,
+        a `--dry-run` `none`. Step 9's "drop the prefix and relaunch" row passes.
    - **HW to run (with step 7):** the row shows "on, last synced <time>" for Another World; Off
      → a launch and an exit sync nothing (no `game-launch: saves:` line, no upload unit), and
      galaxy.json shows `enabled: false` at once; On again → syncs; a failure (e.g. offline exit)

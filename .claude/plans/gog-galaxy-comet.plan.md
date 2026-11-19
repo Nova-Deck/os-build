@@ -542,7 +542,14 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
         moved, `--dry-run` `none`: the off session's saves reached the cloud too.
      The page (user-read): "Cloud saves: off, saves stay on this device" while off, and the
      sync time after 6.
-     Not yet seen on HW: a failure reason on the page (needs an offline exit; step 9's offline row).
+     7. offline (Wi-Fi off, two launches, 2026-11-19): no wait at either end (gogdl failed in
+        ~1.5 s), the games ran, nothing synced, the stamp kept. The page first read "not synced
+        after the last exit: dry run exited 1": the sync kept only gogdl's exit status, the #132
+        class of defect. Fixed in cda8656 (the reason from gogdl's stderr: a network error reads
+        "GOG could not be reached (no network?)", anything else its last error line with URL
+        query strings cut, since gogdl's token refresh puts the client secret there). Installed as
+        OTA bundle 20261119T093248Z (rauc, slot B, /home kept); offline again, the page read
+        "GOG could not be reached". Step 9's offline row passes.
    - **HW to run (with step 7):** the row shows "on, last synced <time>" for Another World; Off
      → a launch and an exit sync nothing (no `game-launch: saves:` line, no upload unit), and
      galaxy.json shows `enabled: false` at once; On again → syncs; a failure (e.g. offline exit)

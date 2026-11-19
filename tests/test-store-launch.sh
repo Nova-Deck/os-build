@@ -491,6 +491,26 @@ check(sr and watcher_of(sr[0])[1] == [] and any("username" in m for m in logged)
 os.environ.pop(gs.STARTED_ENV)
 calls.clear()
 
+# An Epic game with cloud saves gets the same watcher for its upload (epic cloud saves plan step 5).
+EPIC_CLOUD = {"supported": True, "enabled": True, "location": "{UserSavedGames}/X/saves/",
+              "include": None, "exclude": None}
+(home / "epic-cloud.json").write_text(json.dumps({
+    "666": {"token": "epic:doom", "gid": "doom", "install": "/g/doom", "cloud": EPIC_CLOUD},
+    "777": {"token": "epic:off", "gid": "off", "install": "/g/off", "cloud": {**EPIC_CLOUD, "enabled": False}}}))
+calls.clear(); logged.clear()
+argv = gs.start("666", paths, fake_run, prefix="/c/666/pfx")
+sr = started()
+args, comet = watcher_of(sr[0]) if sr else ([], None)
+check(argv is not None and len(sr) == 1 and args[2:] == ["666", "/c/666/pfx"] and comet == []
+      and not any(a.startswith("--setenv=XDG_CONFIG") for a in sr[0]),
+      f"an Epic game with cloud saves on: the watcher for the upload, never Comet ({args}, {comet})")
+check(not any("username" in m for m in logged), "...and no GOG username is looked for")
+os.environ.pop(gs.STARTED_ENV)
+calls.clear()
+check(gs.start("777", paths, fake_run, prefix="/c/777/pfx") is None and not calls,
+      "an Epic game with its cloud saves switched off: no unit at all")
+calls.clear()
+
 user.write_text(json.dumps({"username": "Loki"}))
 argv = gs.start("111", paths, fake_run)
 sr = started()

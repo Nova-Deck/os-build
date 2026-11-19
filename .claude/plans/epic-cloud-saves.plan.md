@@ -213,6 +213,16 @@ Epic tokens. The picker's location name is the game's title.
    POSIX normcase). So legendary's `*.sav` misses Fallout's `AGRUN.SAV`: legendary on Linux would
    neither upload nor delete uppercase save files that a Windows client syncs. See Risks.
 5. **Post-exit upload** through the existing watcher (TDD).
+   **Done 2026-11-19, no code change.** The watcher (`novadeck_gogsession.start`) gates the upload on
+   `novadeck_savesync.cloud_row`, which reads epic-cloud.json since step 4, and only starts Comet for
+   a galaxy.json row with `comet: true`. `tests/test-store-launch.sh` now checks this (129 checks,
+   up from 126): an Epic game with cloud on gets the watcher with the upload prefix and no Comet;
+   no GOG username is looked for; and one switched off gets no unit. `post_exit` for Epic (only
+   `local_newer` uploads, with `--skip-download`; a conflict waits for the next launch) is in
+   `tests/test-store-epicsync.sh` (step 4).
+   **Cosmetic, left as is:** for an Epic game the unit is still `novadeck-comet.service` and the
+   upload `novadeck-gog-upload-<pid>`, and the watcher's log lines say "comet:". Renaming touches
+   GOG's units and their checks for no behaviour change; do it if the journal confuses anyone.
 6. **Game page** for Epic: switch, last sync, reasons.
 
 ### Phase 3 — hardware gates (Pocket Max)

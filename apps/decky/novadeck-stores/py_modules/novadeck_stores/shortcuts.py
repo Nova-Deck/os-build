@@ -33,7 +33,7 @@ import os
 import re
 import shlex
 
-from novadeck_stores import cli, dos_targets, first_run, galaxy, launch, status
+from novadeck_stores import cli, dos_targets, epic_cloud, first_run, galaxy, launch, status
 
 # The gid grammar — still enforced so a bad id never becomes a registry key or a path component.
 TOKEN = re.compile(r"^(epic|gog):[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -193,6 +193,11 @@ def write_registry(p, rows):
         # Which games game-launch starts Comet for (galaxy.py), keyed by appid the same way.
         try:
             galaxy.sync(p, rows)
+        except Exception:  # noqa: BLE001 - same contract as first_run above
+            pass
+        # Which Epic games sync cloud saves, and where (epic_cloud.py), keyed the same way.
+        try:
+            epic_cloud.sync(p, rows)
         except Exception:  # noqa: BLE001 - same contract as first_run above
             pass
     return ok

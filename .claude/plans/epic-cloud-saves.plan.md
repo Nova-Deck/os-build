@@ -171,6 +171,18 @@ Epic tokens. The picker's location name is the game's title.
    seen on HW; the step 9 gate (fresh prefix) checks it on a LocalLow game.
 3. **Epic rows in the plugin** (TDD): `CloudSaveFolder` present/absent, the switch, the install
    folder.
+   **Done 2026-11-19** (`py_modules/novadeck_stores/epic_cloud.py`, `tests/test-store-epic-cloud.sh`,
+   23 checks, in `make test`). It is a sidecar of its own, `<store home>/epic-cloud.json`, beside
+   galaxy.json and keyed the same way (unsigned appid), written from `shortcuts.write_registry`.
+   Row: `{token, gid, install, cloud: {supported, enabled, location, include, exclude} | None}`.
+   `location` is Epic's string, untranslated; the launch side resolves it (step 2). The filter lists
+   are split on commas with the spaces stripped, or None. `cloud` is None when legendary has cached
+   no metadata for the game (unknown, so the launch skips it), and `supported` is False with no
+   `CloudSaveFolder` or only a macOS one. The switch is cloud_config.TOGGLES, shared with GOG per
+   token (absent = on). The metadata is read owner-checked, and a symlinked file is refused. No
+   network.
+   **Left for step 4:** the account id for `{EpicID}`. The launch side reads it from legendary's
+   `user.json` (`account_id`), which it can read as deck, rather than copying it into every row.
 4. **Pre-launch Epic sync** (TDD, legendary stubbed): each status of design §3, the backup before
    every download, a failed backup stops it, timeout → launch proceeds.
 5. **Post-exit upload** through the existing watcher (TDD).

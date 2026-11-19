@@ -291,11 +291,27 @@ exists, the next exit uploads it (`local_newer`: nothing at launch, then `--skip
     session's save stayed put; back online, a dry run says `local_newer`, so the next exit uploads
     it.
 
+**LocalLow on a fresh prefix: PASS 2026-11-19 (Moving Out, appid 2176316226,
+`{AppData}/../LocalLow/Team17 Digital Limited/Moving Out/`, cloud saves from 2021-12 and 2022-02).**
+First launch: `saves: download -> downloaded`. `users/steamuser`, `AppData`, `LocalLow`,
+`Team17 Digital Limited` and `Moving Out` all have the same birth time, 16:25:00.867 (the download);
+Proton's `AppData/Local`, `Roaming` and `Documents` came at 16:25:03.97. There is one `AppData` and
+one `LocalLow`, no second, differently-cased copy. `SaveFile.sav` kept the cloud manifest's time
+(2022-02-27 16:28:30), and the game opened on it. After the user quit, `upload -> uploaded`
+(manifest `2026.11.19-16.28.16`), then `same_age`. Epic spells it `LocalLow` here already, so the
+lowercase respelling (`{appdata}/../locallow`, Death Stranding and Phoenix Point) is still covered
+offline only.
+**Moving Out writes `output_log.txt` into its save folder on every run** (no include list), and the
+new manifest is named after it (16:28:16), not after `SaveFile.sav` (16:28:09). Every session
+reads `local_newer`, so every exit uploads, harmlessly. Across two devices, every launch after
+playing on the other asks "Which saves?"; the dialog's dates tell the user which side is real.
+Same class as Another World's settings file under GOG.
+
 **Phase 3 summary (2026-11-19).** Gates 7 (Decide later + Cloud saves, on a faked conflict), 8, 9
 and 10 pass on the Pocket Max. That was on the OTA of 1d50cf2 plus the frontend_ready hot patch
 (b1aad1c), which the first HW run made necessary. Not run on HW: "This device's saves"
-(`--force-upload`; offline suite only), the LocalLow spelling on a fresh prefix (needs a LocalLow
-game: Moving Out, Neon Abyss), and the case-sensitive filter suspicion (needs a Fallout).
+(`--force-upload`; offline suite only), the lowercase `locallow` respelling (needs Phoenix Point;
+Moving Out passed LocalLow on a fresh prefix), and the case-sensitive filter suspicion (needs a Fallout).
 
 ### Bookkeeping
 

@@ -115,6 +115,14 @@ def busy():
     return unit_state()["ActiveState"] in ("active", "activating", "deactivating", "reloading")
 
 
+def running_key():
+    """The "store:id" the install unit is downloading now, or None."""
+    unit = unit_state()
+    if unit["ActiveState"] not in ("active", "activating", "deactivating"):
+        return None
+    return unit.get("Description", "").removeprefix("novadeck-stores install ")
+
+
 def read_records(p):
     data = status.read_user_json(p["NOVADECK_STORE_INSTALLS"], int(p["NOVADECK_STORE_UID"]))
     return data if isinstance(data, dict) else {}
@@ -193,9 +201,7 @@ def install_status(p):
     READ-ONLY, derived from the artifacts on every call, never written back: so it needs no lock,
     and a panel polling for progress never waits behind a long uninstall.
     """
-    unit = unit_state()
-    running = (unit["ActiveState"] in ("active", "activating", "deactivating")
-               and unit.get("Description", "").removeprefix("novadeck-stores install "))
+    running = running_key()
     out = []
     for key, rec in read_records(p).items():
         item = dict(rec)
@@ -210,6 +216,32 @@ def install_status(p):
             item["state"] = "interrupted"
         out.append(item)
     return {"installs": out}
+
+
+def mark_installed(p, keys):
+    """Store state "installed" on those records of `keys` the CLI has recorded as done. Returns
+    the keys marked ([] when the write failed).
+
+    install() writes "installing", and install_status() only derives the state on each read, so
+    without this a finished game's record said "installing" forever (HW 2026-11-18). The CLI's
+    artifact still decides, as in install_status(). The game the unit is downloading now is
+    skipped: a re-download over a finished install already has its artifact.
+
+    The caller holds the install lock: install() and uninstall() rewrite the same file."""
+    records = read_records(p)
+    candidates = [k for k in keys if isinstance(records.get(k), dict)
+                  and records[k].get("state") != "installed"
+                  and records[k].get("store") in locations.STORE_DIRS
+                  and safe_component(records[k].get("id"))
+                  and completed(records[k]["store"], records[k]["id"], p)]
+    if not candidates:
+        return []  # no systemctl spawn on a pass with nothing to mark
+    running = running_key()
+    marked = [k for k in candidates if k != running]
+    if not marked:
+        return []
+    updated = {k: ({**r, "state": "installed"} if k in marked else r) for k, r in records.items()}
+    return marked if write_records(p, updated) else []
 
 
 def stop():

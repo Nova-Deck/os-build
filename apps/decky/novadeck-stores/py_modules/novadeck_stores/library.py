@@ -27,7 +27,8 @@ def list_argv(store, p):
     if store == "epic":
         return ["legendary", "list", "--json"]
     if store == "gog":
-        return [GOG_OWNED, p["NOVADECK_GOGDL_AUTH"]]
+        # The helper also refreshes the account name Comet is started with (store-gog-owned).
+        return [GOG_OWNED, p["NOVADECK_GOGDL_AUTH"], p["NOVADECK_GOG_USER"]]
     raise ValueError(f"unknown store {store!r}")
 
 

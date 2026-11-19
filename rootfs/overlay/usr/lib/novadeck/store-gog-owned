@@ -1,12 +1,17 @@
 #!/usr/bin/python3
 """novadeck store-gog-owned — the GOG titles an account owns, as JSON on stdout.
 
-    store-gog-owned <gogdl auth.json>
+    store-gog-owned <gogdl auth.json> [<user.json>]
 
 gogdl has no command that lists a library: it asks GOG's owned-games API internally, only to
 answer "does this account own that id" (gogdl/api.py). This asks the same API, through gogdl's own
 session and auth manager, so a token past its expiry is renewed and written back exactly as
 `gogdl auth` would do it.
+
+With a second path it also records the account's username there (NOVADECK_GOG_USER), which gogdl
+does not store. Comet needs it as --username: the name a Galaxy game shows on leaderboards and in
+multiplayer. A listing runs after every sign-in and every library sync, so this keeps it current.
+Failing to fetch it never fails the listing, and keeps the name already stored.
 
 RUN AS THE STORE USER, never as root. The novadeck-stores plugin starts it through systemd-run
 (cli.py). The token is read, used and renewed in this process, and what leaves it is ids, titles
@@ -16,7 +21,9 @@ Exit status: 0 with a JSON list; 3 when there is no usable session (not signed i
 the refresh); 1 on anything else. Nothing on stderr carries a token.
 """
 import json
+import os
 import sys
+import tempfile
 
 EMBED = "https://embed.gog.com"
 API = "https://api.gog.com"
@@ -47,9 +54,37 @@ def owned_titles(get):
     return sorted(titles, key=lambda t: t["title"].casefold())
 
 
+def record_user(get, path):
+    """Write {"username": ...} from userData.json to path. True when written.
+
+    Only the username leaves the answer; userData.json also carries the account's email and
+    more. The file is replaced atomically, so a reader never sees half of it. Any failure, or an
+    answer with no username, leaves the stored file as it was and returns False.
+    """
+    try:
+        data = get(f"{EMBED}/userData.json")
+    except Exception as exc:
+        print(f"store-gog-owned: user name not refreshed: {type(exc).__name__}", file=sys.stderr)
+        return False
+    name = data.get("username") if isinstance(data, dict) else None
+    if not isinstance(name, str) or not name:
+        print("store-gog-owned: user name not refreshed: no username in the answer", file=sys.stderr)
+        return False
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".user.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump({"username": name}, f)
+        os.replace(tmp, path)
+    except OSError as exc:
+        os.unlink(tmp)
+        print(f"store-gog-owned: user name not written: {type(exc).__name__}", file=sys.stderr)
+        return False
+    return True
+
+
 def main(argv):
-    if len(argv) != 2:
-        print("usage: store-gog-owned <gogdl auth.json>", file=sys.stderr)
+    if len(argv) not in (2, 3):
+        print("usage: store-gog-owned <gogdl auth.json> [<user.json>]", file=sys.stderr)
         return 1
     # gogdl is imported here, not at the top: the offline suite loads this file on a host that
     # has no gogdl, to test owned_titles().
@@ -67,6 +102,8 @@ def main(argv):
         response.raise_for_status()
         return response.json()
 
+    if len(argv) == 3:
+        record_user(get, argv[2])
     try:
         titles = owned_titles(get)
     except Exception as exc:

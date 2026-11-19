@@ -291,6 +291,8 @@ def fake_status(pp):
     return {"installs": [{"store": k.split(":")[0], "id": k.split(":")[1], "state": v} for k, v in state.items()]}
 state = {}
 main.installs.install_status = fake_status
+marks = []
+main.installs.mark_installed = lambda pp, keys: (marks.append(sorted(keys)), list(keys))[1]
 main.launch.resolve_target = lambda store, gid, pp, rec: {
     "exe": f"/g/{gid}/game.exe", "startdir": f"/g/{gid}", "platform": "windows"}
 
@@ -325,11 +327,20 @@ row = reg()["epic:A"]
 (ok if row == {"title": "Alpha", "exe": "/g/A/game.exe", "platform": "windows", "appid": 100} else bad)(
     f"the row is now an installed entry with the SAME appid ({row})")
 (ok if [e["message"] for e in events()] == ["Ready to play"] else bad)(f"the user is told it is ready ({events()})")
+(ok if not marks else bad)(
+    f"no record is marked while its tile is downloading, nor on the swap pass itself ({marks})")
 
 # Not shelf any more: a further poll does nothing.
 emitted.clear()
 asyncio.run(plugin.finish_installs(p))
 (ok if not emitted else bad)("an installed entry is never transitioned twice")
+# ...except settle its install record (HW 2026-11-18: it said "installing" forever).
+(ok if marks == [["epic:A"]] else bad)(
+    f"the next pass marks the installed entry's record installed ({marks})")
+marks.clear()
+records["epic:A"] = {**records["epic:A"], "state": "installed"}
+asyncio.run(plugin.finish_installs(p))
+(ok if not marks else bad)(f"a record already installed is not offered again ({marks})")
 
 # Appids retired by the remove + re-add swaps of earlier builds: still ours, kept across an edit,
 # and removed by the next sync.

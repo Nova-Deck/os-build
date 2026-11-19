@@ -32,9 +32,9 @@ import decky
 
 import base64
 
-from novadeck_stores import (artwork, cdp, cli, compat_map, connect, dos_targets, first_run, game_page,
+from novadeck_stores import (artwork, cdp, cli, cloud_saves, compat_map, connect, dos_targets, first_run, game_page,
                              install_requests, installs, launch, library, library_sync, locations, paths,
-                             prefixes, settings, shortcuts, status)
+                             prefixes, save_picks, settings, shortcuts, status)
 
 # Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
 # short enough that a login the user walked away from does not poll for the rest of the session.
@@ -680,6 +680,34 @@ class Plugin:
                           and int(row["appid"]) & 0xFFFFFFFF == int(appid)), None)
             await decky.emit("dos_pick", {"appid": int(appid), "title": title or "This game", "labels": labels})
 
+    # -- gog-comet phase 3: which saves to keep, asked by the launch itself --
+
+    async def take_save_picks(self, p):
+        """Take every which-saves question game-launch left (novadeck_savesync.ask) and put it in
+        front of the user as a save_pick event. A question naming no location of ours is not
+        answered: the launch times out and keeps local, as it does with Decky down."""
+        questions = await asyncio.to_thread(install_requests.take_save_picks, p)
+        if not questions:
+            return
+        registry = await asyncio.to_thread(shortcuts.read_registry, p)
+        for token in questions:
+            event = await asyncio.to_thread(save_picks.describe, p, token, registry)
+            if event is None:
+                decky.logger.info(f"save pick {token}: no such cloud-save location")
+                continue
+            await decky.emit("save_pick", event)
+
+    async def save_pick_answer(self, appid, index, choice):
+        """The dialog's answer: "cloud", "local", or None (Decide later / B: nothing is synced)."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            key = str(int(appid) & 0xFFFFFFFF)
+            if not await asyncio.to_thread(save_picks.answer, p, key, index, choice):
+                return {"error": "the answer could not be written"}
+            return {"ok": True}
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError) as exc:
+            return {"error": f"{type(exc).__name__}"}
+
     async def dos_pick_answer(self, appid, label, remember):
         """The dialog's answer: a label (and, with remember, saved as the game's choice) or None
         for Cancel, which the launch takes as 'do not launch'."""
@@ -716,6 +744,26 @@ class Plugin:
             async with _SHORTCUT_LOCK:
                 return await asyncio.to_thread(dos_targets.set_choice, p, str(int(appid) & 0xFFFFFFFF), label)
         except (OSError, subprocess.SubprocessError, ValueError, TypeError) as exc:
+            return {"error": f"{type(exc).__name__}"}
+
+    async def cloud_saves(self, appid):
+        """The game page's "Cloud saves" row (cloud_saves.page); {"state": "none"} for no row."""
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            return await asyncio.to_thread(cloud_saves.page, p, str(int(appid) & 0xFFFFFFFF))
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError):
+            return {"state": "none"}
+
+    async def set_cloud_saves(self, appid, enabled):
+        """Turn a game's cloud saves on or off. The row's new state, or {error}."""
+        if not isinstance(enabled, bool):
+            return {"error": "the switch must be on or off"}
+        try:
+            p = await asyncio.to_thread(paths.store_paths)
+            async with _SHORTCUT_LOCK:
+                return await asyncio.to_thread(cloud_saves.set_enabled, p,
+                                               str(int(appid) & 0xFFFFFFFF), enabled)
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError) as exc:
             return {"error": f"{type(exc).__name__}"}
 
     async def install_tile(self, store, gid):
@@ -923,8 +971,27 @@ class Plugin:
         registry = await asyncio.to_thread(shortcuts.read_registry, p)
         records = await asyncio.to_thread(installs.read_records, p)
         waiting = [t for t, row in registry.items() if shortcuts.is_shelf(row) and t in records]
-        if not waiting:
-            return  # nothing installing into a tile: no systemctl spawn on an idle poll
+        # Nothing installing into a tile: no systemctl spawn on an idle poll.
+        if waiting:
+            await self._swap_finished(p, registry, records, waiting)
+        await self._settle_records(p, registry, records)
+
+    async def _settle_records(self, p, registry, records):
+        """An entry that is an installed game (no longer a shelf tile) gets "installed" in its
+        install record too. A tile swapped this pass is settled on the next one: the registry
+        snapshot still shows it on the shelf."""
+        unsettled = [t for t, row in registry.items()
+                     if t in records and isinstance(row, dict) and not shortcuts.is_shelf(row)
+                     and records[t].get("state") != "installed"]
+        if not unsettled:
+            return
+        # The install lock, as install() and uninstall() rewrite the same file under it.
+        async with _INSTALL_LOCK:
+            marked = await asyncio.to_thread(installs.mark_installed, p, unsettled)
+        if marked:
+            decky.logger.info(f"install records marked installed: {', '.join(marked)}")
+
+    async def _swap_finished(self, p, registry, records, waiting):
         done = {f"{i['store']}:{i['id']}" for i in
                 (await asyncio.to_thread(installs.install_status, p)).get("installs", [])
                 if i.get("state") == "installed"}
@@ -989,6 +1056,7 @@ class Plugin:
                 # First: a launch is blocked on it, and must hear back within its 10 s. It never
                 # waits on _SHORTCUT_LOCK; an install request can.
                 await self.take_dos_picks(p)
+                await self.take_save_picks(p)
                 await self.take_install_requests(p)
                 # Its own task: a swap can wait a long time on _SHORTCUT_LOCK (a sync talking to
                 # a slow SteamUI), and a tile press must still be taken within the stub's 10 s.

@@ -2,6 +2,7 @@ import { addEventListener, call, definePlugin, removeEventListener, toaster } fr
 import { Navigation } from "@decky/ui";
 import { Content } from "./Content";
 import { showDosPick } from "./DosVersionDialog";
+import { SavePick, showSavePick } from "./SavePickDialog";
 import { applyGamePagePatch } from "./GamePage";
 import { applyLibraryTabsPatch, refreshLibraryTabs, scheduleLibraryTabsRefresh } from "./LibraryTabs";
 import { executeShortcutOp, ShortcutOp } from "./lib/shortcutBridge";
@@ -63,6 +64,12 @@ function onDosPick(ev: DosPick) {
   showDosPick(ev.appid, ev.title, ev.labels);
 }
 
+// gog-comet phase 3: a GOG game whose saves changed here AND in the cloud is waiting on this
+// (game-launch, novadeck_savesync.ask). Registered here for the same reason as dos_pick.
+function onSavePick(ev: SavePick) {
+  showSavePick(ev);
+}
+
 function onSyncFailed(ev: SyncFailed) {
   toaster.toast({
     title: STORE_LABELS[ev.store] ?? ev.store,
@@ -76,6 +83,7 @@ export default definePlugin(() => {
   addEventListener("install_event", onInstallEvent);
   addEventListener("sync_failed", onSyncFailed);
   addEventListener("dos_pick", onDosPick);
+  addEventListener("save_pick", onSavePick);
   // Now that shortcut_op has a listener, the backend may ask Steam for things: it re-asserts the
   // compat tools here, not at its own boot, when nothing would have answered (main.py).
   void call("frontend_ready");
@@ -113,6 +121,7 @@ export default definePlugin(() => {
       removeEventListener("install_event", onInstallEvent);
       removeEventListener("sync_failed", onSyncFailed);
       removeEventListener("dos_pick", onDosPick);
+      removeEventListener("save_pick", onSavePick);
       removeGamePagePatch();
       removeLibraryTabsPatch();
     },

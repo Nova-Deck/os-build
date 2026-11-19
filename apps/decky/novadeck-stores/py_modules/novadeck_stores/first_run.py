@@ -17,15 +17,19 @@ Each step runs with FEX_X87REDUCEDPRECISION=0: the baked Proton's FEX config tur
 precision on, and that garbles the strings of these 32-bit Delphi installers ("Path not fpund")
 until they hang on a hidden error box (HW 2026-10-31, Witcher EE: off → done in 7 s).
 
+A Galaxy-SDK game also gets a step that registers Comet's dummy GalaxyCommunication service
+(galaxy.py; .claude/plans/gog-galaxy-comet.plan.md design §7).
+
 Not handled: v2 manifests that want GOG's script interpreter (ISI) — it lives in the redist
 depot, which we do not download — and GOG's redistributables (MSVC, DirectX).
 """
 import json
 import os
 
-from novadeck_stores import cli, installs, status
+from novadeck_stores import cli, galaxy, installs, status
 
 FILENAME = "first-run.json"
+SERVICE_ID = ":galaxy-service"
 STEP_ENV = {"FEX_X87REDUCEDPRECISION": "0"}
 # The argument set HW-proven on Witcher EE — Heroic's, plus /supportDir and a log-free run.
 LANGUAGE = "English"
@@ -86,8 +90,13 @@ def gog_steps(p, gid, install):
     return steps, manifest.get("buildId")
 
 
-def build(p, registry, records):
-    """appid (str) → {id, steps} for every installed Windows GOG entry that has steps."""
+def build(p, registry, records, service=True):
+    """appid (str) → {id, steps} for every installed Windows GOG entry that has steps.
+
+    A Galaxy-SDK game also gets the step that registers the dummy GalaxyCommunication service
+    (galaxy.py), after its support installers, unless `service` is False (its files are not
+    staged). Its id gains SERVICE_ID, so a prefix that ran the support installers alone runs the
+    set again with the service in it."""
     out = {}
     for token, row in registry.items():
         store, _, gid = token.partition(":")
@@ -97,14 +106,30 @@ def build(p, registry, records):
                 or not rec.get("path")):
             continue
         steps, build_id = gog_steps(p, gid, rec["path"])
+        entry_id = f"{token}:{build_id}"
+        if service and galaxy.has_galaxy_sdk(rec["path"]):
+            steps = [*steps, galaxy.service_step(p)]
+            entry_id += SERVICE_ID
         if steps:
-            out[str(row["appid"] & 0xFFFFFFFF)] = {"id": f"{token}:{build_id}", "steps": steps}
+            out[str(row["appid"] & 0xFFFFFFFF)] = {"id": entry_id, "steps": steps}
     return out
 
 
+def _has_service_step(table, p):
+    step = galaxy.service_step(p)
+    return any(step in entry["steps"] for entry in table.values())
+
+
 def sync(p, registry):
-    """Rewrite first-run.json from the registry when it changed. True when the file is current."""
-    wanted = build(p, registry, installs.read_records(p))
+    """Rewrite first-run.json from the registry when it changed. True when the file is current.
+
+    The service files are staged before a table naming their step is written. When they cannot
+    be, the table goes without that step, so no launch runs a .bat that is not there; the next
+    sync tries again, and its new id then runs the step."""
+    records = installs.read_records(p)
+    wanted = build(p, registry, records)
+    if _has_service_step(wanted, p) and not galaxy.stage_service(p):
+        wanted = build(p, registry, records, service=False)
     current = status.read_user_json(path(p), int(p["NOVADECK_STORE_UID"]))
     if current == wanted or (current is None and not wanted):
         return True

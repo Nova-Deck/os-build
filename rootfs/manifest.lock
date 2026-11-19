@@ -46,6 +46,8 @@ ca-certificates-mozilla 3.124-1 aarch64 snapshot c271b982d8743e24babb9cfb9f5ca6b
 ca-certificates-utils 20240618-1 any snapshot aabd5b2b7030716ccdd465d607e734e851fe4a01adf8293a3968fe22eb89ce9b
 cairo 1.18.4-1 aarch64 snapshot d3d64a92e050a35877154ae55391221b999f300fc8fecda5ff012c4bc8ab5a7e
 catatonit 0.2.1-2 aarch64 snapshot f62395c8c98f7cffc353e52cf3b3769c9ae07c52e4f6f87cb4f75bd96ba21774
+comet 0.4.1 - prebuilt 33c52a7f4747e4e3340b1de955683679e33d01ba1a4fd2f9d79d7eb4dc229fc8
+comet-dummy-service 0.4.1 - prebuilt e89e837fb33d11e4757fe4ff46255ea35d95e1ed32750ef804a28bee8ef7de53
 conmon 1:2.2.1-1.1 aarch64 novadeck 3189bbe25c5e862f32fe15c3bf3ff8c7c6478ddbbf7450adea399d17dc7ff1b0
 containers-common 1:0.67.0-1.1 any novadeck 12f26f916473714db73856e40f21dc64c7b08e1ba7ee9356ed6cb450bea52274
 coreutils 9.11-1 aarch64 snapshot d5d36b4c82833f6d2f546df40dfc13b51607333ad3116d83c4b059b6d5678e87
@@ -107,7 +109,7 @@ gnulib-l10n 20241231-1 any snapshot 86e6ea818cb331171018bef6e4486c1176064655e0d4
 gnupg 2.4.9-1 aarch64 stripped b29edda628e9106b6cc1affd85a53e96694319173cd6f99e044c3420c1ad977b
 gnutls 3.8.13-2 aarch64 snapshot 7082557fe0e0ae921ba216c365e6d555865b4ba65d7f836b5d504cf15e4ed489
 gobject-introspection-runtime 1.86.0-2 aarch64 snapshot 542320c218e9645ae5b00b4ec97a3357c348da04866b0afd70260527a0aaa242
-gogdl 1.3.0-1.1 aarch64 novadeck f4edc7ef2cbae09fc1dfe6103e6c5cd7fb12e28a24e20f999df03cc721be8ef4
+gogdl 1.3.0-2.1 aarch64 novadeck 6db29d08ee8b92c43cf094066a857a776496e89dcc78d96aaea69a8daec95729
 gperftools 2.18.1-1 aarch64 snapshot c161ea5939580ef5f0d237f5cb3277034120afed4e10191cca5535303448fce3
 gpgme 2.1.0-1 aarch64 snapshot f9e3d4a6d08df9570b51d863bea87f1dd0a4a04e49dd59323cf235bc7b1e8a56
 gpm 1.20.7.r38.ge82d1a6-6 aarch64 snapshot 3e6233c680baab5204a11099256715c897178dfc123031dd3a462e99daee5701

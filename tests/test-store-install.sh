@@ -83,6 +83,37 @@ mac = [t for t in titles if t["id"] == "3"]
 (ok if [t["title"] for t in titles] == sorted(t["title"] for t in titles) else bad)(
     "titles come back sorted by name")
 
+# -- the GOG account name, kept for Comet's --username (the name a Galaxy game shows) --
+import os, tempfile
+udir = tempfile.mkdtemp()
+upath = os.path.join(udir, "user.json")
+ucalls = []
+def user_get(url):
+    ucalls.append(url)
+    return {"username": "Loki", "galaxyUserId": "4711", "email": "never@stored"}
+(ok if helper.record_user(user_get, upath) is True else bad)("record_user reports a written name")
+(ok if ucalls == ["https://embed.gog.com/userData.json"] else bad)(
+    f"the name comes from embed.gog.com/userData.json ({ucalls})")
+stored = json.load(open(upath))
+(ok if stored == {"username": "Loki"} else bad)(
+    f"user.json holds the username and nothing else from the account ({stored})")
+(ok if os.listdir(udir) == ["user.json"] else bad)(
+    f"the write leaves no temp file behind ({os.listdir(udir)})")
+
+def renamed_get(url):
+    return {"username": "Loki2"}
+helper.record_user(renamed_get, upath)
+(ok if json.load(open(upath)) == {"username": "Loki2"} else bad)("a later listing refreshes the name")
+
+def failing_get(url):
+    raise OSError("offline")
+(ok if helper.record_user(failing_get, upath) is False else bad)("a failed fetch reports False")
+(ok if json.load(open(upath)) == {"username": "Loki2"} else bad)("a failed fetch keeps the stored name")
+for answer in ({}, {"username": ""}, {"username": None}, ["not", "a", "dict"]):
+    helper.record_user(lambda url, a=answer: a, upath)
+(ok if json.load(open(upath)) == {"username": "Loki2"} else bad)(
+    "an answer with no usable username keeps the stored name")
+
 # -- Epic: legendary list --json --
 from novadeck_stores import cli, library
 lgd = json.dumps([
@@ -118,10 +149,12 @@ by = {x["id"]: x for x in t}
 
 # -- which argv lists each store, as whom, and that stdout is read --
 p = {"NOVADECK_STORE_USER": "deck", "LEGENDARY_CONFIG_PATH": "/h/legendary",
-     "NOVADECK_GOGDL_AUTH": "/h/gogdl/auth.json", "GOGDL_CONFIG_PATH": "/h/gogdl"}
+     "NOVADECK_GOGDL_AUTH": "/h/gogdl/auth.json", "GOGDL_CONFIG_PATH": "/h/gogdl",
+     "NOVADECK_GOG_USER": "/h/gogdl/user.json"}
 (ok if library.list_argv("epic", p) == ["legendary", "list", "--json"] else bad)("Epic lists with legendary list --json")
-(ok if library.list_argv("gog", p) == ["/usr/lib/novadeck/store-gog-owned", "/h/gogdl/auth.json"] else bad)(
-    "GOG lists through the helper, handed the declared auth path")
+(ok if library.list_argv("gog", p) == ["/usr/lib/novadeck/store-gog-owned", "/h/gogdl/auth.json",
+                                       "/h/gogdl/user.json"] else bad)(
+    "GOG lists through the helper, handed the declared auth and user paths")
 
 seen = {}
 real_run = subprocess.run
@@ -408,6 +441,48 @@ finally:
     subprocess.run = real_run
 (ok if st["epic:Run"]["state"] == "interrupted" else bad)(
     "an install whose unit is gone (stopped, failed, or a reboot) reads interrupted — resume is the same call")
+
+# -- mark_installed: the record follows the CLI's artifact (HW 2026-11-18: "installing" forever) --
+def mark(keys, write_rc=0):
+    calls = []
+    def run(argv, **kw):
+        calls.append(argv)
+        if argv[0] == "systemctl":
+            return fake_run(argv, **kw)
+        written.append(json.loads(kw["input"]))
+        return subprocess.CompletedProcess(argv, write_rc)
+    subprocess.run = run
+    try:
+        return installs.mark_installed(p, keys), calls
+    finally:
+        subprocess.run = real_run
+
+written.clear()
+unit.update(ActiveState="active", Description="novadeck-stores install gog:8")
+got, calls = mark(["epic:Run", "epic:Done", "gog:7", "gog:8", "epic:Old", "gog:nope"])
+(ok if got == ["epic:Done"] else bad)(
+    "marks only a record whose CLI artifact says done, not already installed, and not the one the "
+    f"unit is downloading now (a re-download over a finished game) ({got})")
+new = written[-1] if written else {}
+(ok if new.get("epic:Done", {}).get("state") == "installed"
+    and {k: v for k, v in new.items() if k != "epic:Done"} == {k: v for k, v in records.items() if k != "epic:Done"}
+    else bad)(f"one write: that record gains state installed, every other record is untouched ({new})")
+unit["ActiveState"] = "inactive"
+written.clear()
+got, calls = mark(["gog:8"])
+(ok if got == ["gog:8"] and written and written[-1]["gog:8"]["state"] == "installed" else bad)(
+    f"once the unit is gone, the finished GOG record is marked ({got})")
+written.clear()
+got, calls = mark(["gog:7", "epic:Old"])
+(ok if got == [] and not calls else bad)(
+    f"nothing to mark: no systemctl spawn and no write ({got}, {calls})")
+got, calls = mark(["epic:Done"], write_rc=1)
+(ok if got == [] else bad)(f"a write that fails marks nothing, so the next pass tries again ({got})")
+records_bad = {"x": {"store": "gog", "id": "../../etc", "state": "installing"}}
+json.dump(records_bad, open(p["NOVADECK_STORE_INSTALLS"], "w"))
+got, calls = mark(["x"])
+(ok if got == [] and not calls else bad)(f"a record with an unusable id is never looked up ({got})")
+json.dump(records, open(p["NOVADECK_STORE_INSTALLS"], "w"))
 
 # -- stop --
 seen = []

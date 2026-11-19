@@ -144,9 +144,12 @@ gogdl_sources="$(pkgbuild_array "$GOGDL" source | grep -c '::')"
   && ok "gogdl: two sources (the tarball's xdelta3/ is an empty submodule dir)" \
   || bad "gogdl: expected 2 sources, found $gogdl_sources — a one-source build cannot compile the extension"
 
-[ "$(pkgbuild_array "$GOGDL" sha256sums | grep -cE "^[0-9a-f]{64}$")" -eq 2 ] \
-  && ok "gogdl: both sources carry a sha256" \
-  || bad "gogdl: sha256sums does not cover both sources"
+# Every source carries a sha256: the two tarballs, plus the --dry-run patch's build-time check
+# script (a local source, packages/gogdl/source.pin).
+gogdl_all="$(pkgbuild_array "$GOGDL" source | grep -c .)"
+[ "$(pkgbuild_array "$GOGDL" sha256sums | grep -cE "^[0-9a-f]{64}$")" -eq "$gogdl_all" ] \
+  && ok "gogdl: every source carries a sha256 ($gogdl_all)" \
+  || bad "gogdl: sha256sums does not cover every source"
 
 # The variable and the URL cannot drift apart. (Matching either to UPSTREAM is the bump-time human
 # step — see this file's header.)
@@ -179,7 +182,7 @@ else
   # The host has no deck user, so its uid is handed in; the lookup itself is checked below.
   env_out="$(NOVADECK_STORE_UID=1000 bash "$STORE_ENV" 2>/dev/null)"
   for var in NOVADECK_STORE_USER NOVADECK_STORE_UID NOVADECK_STORE_HOME LEGENDARY_CONFIG_PATH \
-             NOVADECK_GOGDL_AUTH GOGDL_CONFIG_PATH NOVADECK_STORE_INSTALLS; do
+             NOVADECK_GOGDL_AUTH GOGDL_CONFIG_PATH NOVADECK_STORE_INSTALLS NOVADECK_GOG_USER; do
     printf '%s\n' "$env_out" | grep -q "^${var}=" \
       && ok "store-env emits $var" \
       || bad "store-env does not emit $var — a caller would fall back to the CLI's own default"

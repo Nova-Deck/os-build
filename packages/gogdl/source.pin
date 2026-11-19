@@ -13,14 +13,27 @@
 # PKGBUILD header has the detail; the offline suite (tests/test-store-cli.sh) asserts the second
 # source stays pinned to the commit upstream's .gitmodules names.
 #
+# PATCH 0001 adds `save-sync --dry-run`: print the sync's classification (upload / download /
+# conflict / none, plus each side's file count and newest time) as JSON and change nothing. Cloud
+# saves need the verdict BEFORE anything moves, because gogdl only logs a conflict, deletes what
+# the other side lacks, and transfers into an empty side whatever --skip-* says
+# (.claude/plans/gog-galaxy-comet.plan.md design §6). Also sent upstream; drop it once a gogdl
+# release carries --dry-run. check-dry-run.py (a local source) runs from build() against the
+# patched tree, because the overlay build runs makepkg with --nocheck.
+#
 # Fields (see packages/README.md):
 #   name           pkgname (must match the PKGBUILD); also the work/ build-dir + repo entry
 #   pkgbuild_local path (relative to this dir) to the checked-in PKGBUILD to build
 #   pkgrel_suffix  numeric suffix appended to the PKGBUILD's pkgrel so pacman prefers our build
+#   patches        under patches/, applied -p1 right after prepare()'s first cd
+#   local_sources  files the PKGBUILD's own source=() names, staged beside it
 #
 # To bump gogdl: edit pkgver + sha256sums in packages/gogdl/PKGBUILD, AND re-read the submodule
 # commit out of the new tag's .gitmodules — a version bump that leaves _xdelta_commit stale builds
-# green against the wrong xdelta3. Then `make relock`.
+# green against the wrong xdelta3. Re-check that patch 0001 still applies (or is upstream). Then
+# `make relock`.
 name: gogdl
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
+patches: 0001-save-sync-add-dry-run.patch
+local_sources: check-dry-run.py

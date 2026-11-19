@@ -448,9 +448,9 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
      sides since the stored timestamp (or none stored: its first sync, which is a conflict). The
      dialog shows with both dates; each of the three answers does what it says; the backup exists
      after *Cloud saves*.
-   - Not done, worth deciding: *This device's saves* overwrites the cloud with no copy of what it
-     replaces. A cloud backup (download into the backup dir first) would make both answers
-     undoable.
+   - **No cloud backup (decided 2026-11-19).** *This device's saves* overwrites the cloud with no
+     copy of what it replaces. A backup nobody can restore is useless, and restoring one would
+     need its own dialog; the local backup before *Cloud saves* stays.
 7. **Post-exit upload** in the watcher; timestamp stored.
 8. **Game page toggle**: *Cloud saves: on/off*, plus the last sync time.
 9. **HW gate** (Another World, or any cloud-enabled GOG title):

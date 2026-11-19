@@ -540,6 +540,8 @@ installed), or on the Pocket FIT for the dummy-service title. One commit per ste
      6. switch On again: `saves: upload -> nothing` at launch (the off session's change read as
         local-only: no download over it, no question), `after exit: upload -> uploaded`, stamp
         moved, `--dry-run` `none`: the off session's saves reached the cloud too.
+     The page (user-read): "Cloud saves: off, saves stay on this device" while off, and the
+     sync time after 6.
      Not yet seen on HW: a failure reason on the page (needs an offline exit; step 9's offline row).
    - **HW to run (with step 7):** the row shows "on, last synced <time>" for Another World; Off
      → a launch and an exit sync nothing (no `game-launch: saves:` line, no upload unit), and

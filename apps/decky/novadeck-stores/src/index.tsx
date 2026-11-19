@@ -4,6 +4,7 @@ import { Content } from "./Content";
 import { showDosPick } from "./DosVersionDialog";
 import { SavePick, showSavePick } from "./SavePickDialog";
 import { applyGamePagePatch } from "./GamePage";
+import { applyNativePage } from "./NativePage";
 import { applyLibraryTabsPatch, refreshLibraryTabs, scheduleLibraryTabsRefresh } from "./LibraryTabs";
 import { executeShortcutOp, ShortcutOp } from "./lib/shortcutBridge";
 import { STORE_LABELS } from "./types";
@@ -87,6 +88,9 @@ export default definePlugin(() => {
   // Now that shortcut_op has a listener, the backend may ask Steam for things: it re-asserts the
   // compat tools here, not at its own boot, when nothing would have answered (main.py).
   void call("frontend_ready");
+  // Steam's own game page, steered with our state (NativePage.tsx). Before the legacy row's patch,
+  // which stands down while this is live and is the page's install surface when it is not.
+  const removeNativePage = applyNativePage();
   // Revision 2: Install / progress / Uninstall on Steam's own game page (GamePage.tsx).
   const removeGamePagePatch = applyGamePagePatch();
   // R2: Epic / GOG tabs in Steam's library.
@@ -123,6 +127,7 @@ export default definePlugin(() => {
       removeEventListener("dos_pick", onDosPick);
       removeEventListener("save_pick", onSavePick);
       removeGamePagePatch();
+      removeNativePage?.();
       removeLibraryTabsPatch();
     },
     // NO alwaysRender: this panel holds no pending edits and nothing to keep warm. It re-reads on

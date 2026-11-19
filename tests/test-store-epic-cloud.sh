@@ -148,6 +148,34 @@ try:
 finally:
     epic_cloud.sync = real_sync
 check(synced == [registry], "write_registry calls epic_cloud.sync with the rows it wrote")
+
+# ---------------------------------------------------------------------------------------------
+print("== the frontend's load brings both cloud sidecars current")
+# HW 2026-11-19: an OTA brought epic-cloud.json to a card with DOOM 64 installed. Nothing changed
+# the registry afterwards, so the file was never written and the game's first launch synced nothing.
+import asyncio, types
+sys.modules["decky"] = types.SimpleNamespace(logger=types.SimpleNamespace(info=lambda *a: None))
+sys.path.insert(0, os.path.join(sys.argv[1], ".."))
+import main
+from novadeck_stores import first_run, dos_targets, galaxy
+(home / "shortcuts.json").write_text(json.dumps(registry))
+main.paths.store_paths = lambda ensure=False: p
+async def no_reassert(self, pp=None): return 0
+main.Plugin.reassert_compat = no_reassert
+calls = []
+first_run.sync = lambda pp, rows: True
+dos_targets.sync = lambda pp, rows: True
+galaxy.sync = lambda pp, rows: calls.append(("galaxy", rows)) or True
+epic_cloud.sync = lambda pp, rows: calls.append(("epic", rows)) or True
+check(asyncio.run(main.Plugin().frontend_ready()) is True, "frontend_ready answers True")
+check(("epic", registry) in calls, "frontend_ready writes epic-cloud.json from the stored registry")
+check(("galaxy", registry) in calls,
+      "...and galaxy.json, which had the same gap (only a registry write regenerated it)")
+def boom(pp, rows): raise OSError("disk full")
+calls.clear()
+galaxy.sync = boom
+check(asyncio.run(main.Plugin().frontend_ready()) is True and ("epic", registry) in calls,
+      "a failing galaxy sync does not cost the Epic one, nor the frontend its answer")
 PY
 )"
 rc=$?

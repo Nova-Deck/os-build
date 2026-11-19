@@ -237,6 +237,17 @@ Epic tokens. The picker's location name is the game's title.
 
 ### Phase 3 — hardware gates (Pocket Max)
 
+**First HW run, 2026-11-19 (OTA `20261119T155217Z`, git 1d50cf2, slot B).** The user played DOOM 64
+and saved. Nothing synced: `epic-cloud.json` was never written, so there was no row, no status
+record, and no `save_path` in installed.json. The plugin regenerated galaxy.json and epic-cloud.json
+ONLY on a registry write, and nothing had changed the registry since the OTA. `frontend_ready`
+re-synced first-run steps and DOSBox targets for exactly this case, but not the two cloud sidecars.
+GOG had the same hole; it never showed because its games were installed after galaxy.json
+existed. **Fixed:** `frontend_ready` now syncs both, each best-effort under the shortcut lock;
+`tests/test-store-epic-cloud.sh` has 27 checks. The save itself was where step 2 resolves it:
+`Saved Games/Nightdive Studios/DOOM 64/saves/save_00.sav` (+ `.sav.sig`, 678 KB). Once the row
+exists, the next exit uploads it (`local_newer`: nothing at launch, then `--skip-download`).
+
 7. First sync of a game with saves on both sides → asked; each answer does what it says.
 8. Play, quit → uploaded; dry run says `same_age`.
 9. Fresh prefix (or a second device) → the cloud's saves come down before the first start.

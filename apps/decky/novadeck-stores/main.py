@@ -32,9 +32,10 @@ import decky
 
 import base64
 
-from novadeck_stores import (artwork, cdp, cli, cloud_saves, compat_map, connect, dos_targets, first_run, game_page,
-                             install_requests, installs, launch, library, library_sync, locations, paths,
-                             prefixes, save_picks, settings, shortcuts, status)
+from novadeck_stores import (artwork, cdp, cli, cloud_saves, compat_map, connect, dos_targets, epic_cloud,
+                             first_run, galaxy, game_page, install_requests, installs, launch, library,
+                             library_sync, locations, paths, prefixes, save_picks, settings, shortcuts,
+                             status)
 
 # Long enough to type an email and a password on the on-screen keyboard and clear a captcha;
 # short enough that a login the user walked away from does not poll for the rest of the session.
@@ -1102,6 +1103,18 @@ class Plugin:
             decky.logger.info(f"frontend ready: DOSBox targets {'current' if current else 'NOT written'}")
         except Exception as exc:  # noqa: BLE001 - best-effort, never fail the caller
             decky.logger.info(f"dos_targets sync: {type(exc).__name__}: {exc}")
+        # And the two cloud-save sidecars the launch reads: a game installed before they existed,
+        # or before an OTA that changed them, gets its row with no change to its entry. Without
+        # this, DOOM 64's first launch after the OTA that brought epic-cloud.json synced nothing
+        # (HW 2026-11-19). galaxy.sync may fetch GOG's cloud config (cloud_config: 5 s, cached).
+        for name, sidecar in (("galaxy", galaxy), ("epic-cloud", epic_cloud)):
+            try:
+                async with _SHORTCUT_LOCK:
+                    registry = await asyncio.to_thread(shortcuts.read_registry, p)
+                    current = await asyncio.to_thread(sidecar.sync, p, registry)
+                decky.logger.info(f"frontend ready: {name} {'current' if current else 'NOT written'}")
+            except Exception as exc:  # noqa: BLE001 - best-effort, never fail the caller
+                decky.logger.info(f"{name} sync: {type(exc).__name__}: {exc}")
         return True
 
     async def _main(self):

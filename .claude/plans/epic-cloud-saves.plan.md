@@ -328,11 +328,25 @@ Moving Out passed LocalLow on a fresh prefix), and the case-sensitive filter sus
   re-send unchanged saves, which is harmless, but note it if seen.
 - **Games that save in `{InstallDir}`**: decided in step 4. The backup copies only what the include
   list selects, and a whole-install folder with no include list is refused.
-- **legendary matches filters case-sensitively on Linux.** The Fallouts' uppercase saves
-  (`SAVE.DAT`, `*.SAV`) don't match `*.sav, *.dat`, so they would never be uploaded. Check on HW
-  with a Fallout before trusting it. If confirmed, the fix is a second legendary patch
-  (case-insensitive `_filename_matches`, which is what Epic's Windows client effectively does),
-  sent upstream with 0001.
+- **legendary matches filters case-sensitively on Linux: CONFIRMED offline, 2026-11-19.** The check
+  ran legendary 0.20.43's own `SaveGameHelper.package_savegame` (upload) and `get_deletion_list`
+  (download) against a fake install with the Fallouts' real filters, the lists parsed exactly as
+  core.py does (stripped for upload, NOT for download):
+  - uppercase saves (`SAVE.DAT`, `AGRUN.SAV`, `TACTICS SAVE 2.SAV`) are neither uploaded nor
+    deleted. On Windows the same code matches them, because `fnmatch` normcases there; the bug is
+    Linux-only. When nothing matches, legendary logs "No save files matching the specified filters"
+    and exits 0, and our status then says **"uploaded"**: a game that looks synced and isn't;
+  - a lowercase `save.dat` is uploaded but never deleted by a download (` *.dat` with its leading
+    space matches nothing), so a download leaves stale `.dat` saves behind. That's benign;
+  - **TRAP:** that same leading-space bug is what stops a download deleting `master.dat`, Fallout's
+    main data file. The exclude list reaches the download as `[critter.dat, " master.dat"]`, which
+    matches nothing. A patch that makes matching case-insensitive and strips ONLY the include list
+    would make a cloud download delete the game's data. So a legendary 0002 must strip BOTH
+    download lists and match case-insensitively together, with a check-dry-run case for exactly
+    this.
+  Still unknown: the real case of Epic Fallout's save files (needs an install; Fallout 1 is the
+  smallest). Separately ours: report legendary's "No save files matching…" as "nothing uploaded",
+  not "uploaded".
 - **CALL_TIMEOUT (30 s) per transfer**, shared with GOG. A large Epic save (Cities: Skylines) over
   slow Wi-Fi could be cut off mid-download, after legendary has already deleted the local files.
   The backup holds them, and the next launch downloads again (an empty local side reads

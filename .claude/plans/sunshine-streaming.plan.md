@@ -1,0 +1,139 @@
+# Plan: Sunshine + Moonlight on novadeck, for non-Steam games
+
+**Goal**: Remote Play Together for the games Steam cannot invite to (Epic, GOG). A novadeck **hosts**
+with Sunshine. Friends **join** with Moonlight, from another novadeck (shipped Moonlight) or any device.
+**Branch**: `sunshine-streaming`, one commit per step.
+**Complexity**: Large. Kernel (iris gen1, encode and decode), three new packages (qcom-va-driver,
+Sunshine, Moonlight-qt), a capture question under gamescope, and a QAM surface.
+
+User decisions (2026-11-20):
+- **Both sides ship on novadeck: Sunshine (host) and Moonlight (client).**
+- **SM8250 (gen1, Pocket Max) is tested first.** It is the hard case.
+- **If SM8250 encode fails, qcom-va-driver still ships for decode** (the Moonlight side).
+
+## Verified before planning
+
+### Host (Sunshine)
+
+| Fact | Evidence |
+|---|---|
+| Sunshine has no V4L2 encoder. Its Linux encoders are nvenc, vaapi, vulkan, software | `_reference/sunshine` 00a2994, `src/video.cpp:1302,1366` |
+| Sunshine's probe needs the first packet to be an IDR, and rewrites the SPS inside IDR packets | `video.cpp:3156`, `:1934` |
+| Mesa ships no VA driver for freedreno; turnip has no `VK_KHR_video*`. Moonshine (another host) needs Vulkan encode: out | Mesa 26.3.0 `meson.build:840`; `_reference/moonshine` e6a7391 |
+| Sunshine reads PipeWire only through the portal or KWin, which gamescope has neither of. KMS capture reads one plane | `src/platform/linux/misc.cpp:1474-1505`, `portalgrab.cpp`, `kwingrab.cpp` |
+
+### Client (Moonlight-qt)
+
+| Fact | Evidence |
+|---|---|
+| Linux hardware decode goes through FFmpeg: VAAPI/VDPAU/CUDA hwaccels, or non-hwaccel decoders including `h264_v4l2m2m`/`hevc_v4l2m2m` | `_reference/moonlight-qt` 2dc63d1, `app/streaming/video/ffmpeg.cpp:130-141` |
+| Upstream ffmpeg's v4l2m2m **decoder** outputs system-memory frames only (no DRM_PRIME), so every frame is CPU-copied for display: the CEF failure mode on SM8250 | `_reference/ffmpeg` 8.1.1 `libavcodec/v4l2_m2m_dec.c` |
+| The VAAPI renderer exports surfaces as dmabufs (`vaExportSurfaceHandle`) for zero-copy EGL import; qcom-va-driver implements that export (PRIME2) | `ffmpeg-renderers/vaapi.cpp`, `qcom-va-driver/src/backend.cpp:1111,1256` |
+| Moonlight honours a preset `LIBVA_DRIVER_NAME`, and has no vendor gate that would reject qcom-va-driver | `vaapi.cpp:283-340,401-440` |
+
+### qcom-va-driver and iris
+
+| Fact | Evidence |
+|---|---|
+| **qcom-va-driver** (Radxa, MIT) is a VA-API driver over iris V4L2. H.264/HEVC Main encode, H.264/HEVC/VP9/AV1 decode, DMABUF import and export. "Tested with Sunshine: use H.264 / SDR". Tested only on SC8280XP (gen2) | `_reference/qcom-va-driver` 0980a1d, README |
+| It installs `qcom_drv_video.so` plus an `msm` alias, so libva picks it **for every VA client** on our DRM driver | README "Build and install" |
+| The encoder opens any `iris_driver` node. Every S_CTRL failure is fatal; it sets `HEADER_MODE_JOINED`, `PREPEND_SPSPPS_TO_IDR=1`, `BITRATE_PEAK`. Deblocking controls are optional | `src/encoder.cpp:208,362,643-651,369-395` |
+| The decoder hard-requires `DEC_DISPLAY_DELAY(_ENABLE)` and enough CAPTURE buffers | `src/decoder.cpp:128-135,218-229` |
+| **Gen1 iris lacks `PREPEND_SPSPPS_TO_IDR`, `BITRATE_PEAK` and `DISPLAY_DELAY`**, so qcom-va-driver fails on SM8250 for encode AND decode | 7.3.5 `iris_hfi_gen1.c` cap list |
+| Gen1's default `HEADER_MODE=JOINED` already sets `SYNC_FRAME_SEQUENCE_HEADER`=1, which venus uses for "headers with every sync frame". SM8250 probably already emits SPS/PPS per IDR; only the control is missing | `iris_hfi_gen1.c:120-128`, `venus/venc.c:876-885` |
+| Venus does decode order on the same HFI family with `HFI_PROPERTY_PARAM_VDEC_OUTPUT_ORDER` | `venus/vdec.c:703`, `vdec_ctrls.c:33-36` |
+| **Our 1092 already gives gen2 `DISPLAY_DELAY` + stage-1/top-OPP low-latency decode**, written for Moonlight and Remote Play. That overlap is why Radxa's 0001 does not apply | `kernel/patches/1092-*` |
+| Radxa's 5 patches (on the list, bod 2026-11-17: "close to mergeable") are gen2-only. Against our tree: 0002-0004 apply, 0001 and 0005 do not | `patches/`, dry run 2026-11-20 |
+| Sending `VENC_MAX_BITRATE` kills the SM8250 session (our dropped 1098) | memory `steam-remote-play-host-video-enc0` |
+| Steam's own Remote Play Together hosting works on gen2 iris (Odin 2 + Pocket S2) | user, 2026-11-20 |
+
+## Steps
+
+### 0. Measure SM8250 before writing code (read-only on the Pocket Max)
+- Encode a clip with ffmpeg `h264_v4l2m2m` and count SPS/PPS per IDR. That confirms or refutes that gen1
+  already emits headers on every IDR. **Gate for 1a.**
+
+### 1. Kernel, iris gen1 (free slots: 1104, 1106-1109)
+- **1a** (host) Expose `PREPEND_SPSPPS_TO_IDR` on gen1, folded into the existing
+  `SYNC_FRAME_SEQUENCE_HEADER` setter (mirrors `iris_set_header_mode_gen2`).
+- **1b** (client) `DEC_DISPLAY_DELAY(_ENABLE)` on gen1 via `HFI_PROPERTY_PARAM_VDEC_OUTPUT_ORDER`, ported
+  from venus. Extend 1092's low-latency decode to gen1 if the stage/OPP logic applies there.
+- **Not in the kernel:** `BITRATE_PEAK`. A control that is accepted but never sent would mislead; see 2a.
+- Gen2: 1092 covers decode order. Take Radxa 0002 (capture pool) if the driver asks for it, 0003-0004 on
+  merit, and 0005 only for AV1; skip 0001.
+
+### 2. qcom-va-driver package
+- **2a** Patch: send `BITRATE_PEAK` only when QUERYCTRL finds it (the pattern it already uses for
+  deblocking). Offer it to Radxa.
+- **2b** `packages/qcom-va-driver`, `-Dcdsp_vpp=disabled` (no QAIC/Hexagon download in the builder).
+- **2c** **Limit the blast radius: no `msm` alias at first.** Sunshine and Moonlight each set
+  `LIBVA_DRIVER_NAME=qcom` in their own launch env, so Steam, CEF, Remote Play and recording see no
+  change. A system-wide alias is a later, separately A/B'd decision.
+- **Gates (SM8250 first, then one gen2):** `vainfo` lists `VAEntrypointVLD` and `VAEntrypointEncSlice` for
+  H.264. `ffmpeg -c:v h264_vaapi` holds the asked bitrate (the gen1 rate-control history: 1098).
+  `ffmpeg -hwaccel vaapi` decodes a 1080p60 stream in real time.
+
+### 3. Sunshine package (host)
+- `packages/sunshine` from the upstream Arch PKGBUILD, CUDA off, built against our FFmpeg with VA-API
+  (not LizardByte's prebuilt; check `FFMPEG_PREPARED_BINARIES`).
+- **Gate:** Sunshine's encoder probe picks `vaapi` H.264 (log), and a LAN Moonlight client on a PC
+  streams the session.
+
+### 4. Moonlight-qt package (client)
+- `packages/moonlight-qt`, FFmpeg with VA-API. Launched as a Steam tile (a non-Steam shortcut, like the
+  alien-games tiles), with `LIBVA_DRIVER_NAME=qcom`.
+- **Gates:** under gamescope, the log shows `VAAPI` with EGL direct rendering, not a software decoder.
+  Moonlight's stats overlay shows decode time and frame drops at 1080p60 on SM8250 and one gen2.
+  Controller input reaches the host.
+- **Fallback if VA-API decode fails on a SoC:** `h264_v4l2m2m` with its CPU copy. Measure it on that SoC
+  before accepting it (the CEF verdict).
+
+### 5. Capture under gamescope (host)
+- First try `capture = kms` and check rotated panels, MangoHud and overlay planes (the rotation-work
+  caveats).
+- If KMS is wrong: add a Sunshine capture method for gamescope's own PipeWire node, which Steam already
+  uses ("Desktop PipeWire NV12"). Model it on `kwingrab.cpp` (get a node id, stream through the shared
+  `pipewire.cpp`). Upstreamable.
+- Stream the **whole session**, not a Sunshine "app": the friend sees whatever is running, as with
+  Remote Play Together.
+
+### 6. Input and several players (host)
+- Sunshine's virtual pads (uinput/uhid) must show up in Steam Input as extra controllers. Check player
+  numbering.
+- Sunshine `channels` > 1: one iris encode session per client. Measure 2 clients on SM8250.
+
+### 7. Its own Decky plugin (user decision, 2026-11-20)
+A new plugin, `apps/decky/novadeck-<name>` (name TBD; the repo convention, beside `novadeck-stores`),
+not a section of an existing panel. Two halves:
+- **Host:** start / stop Sunshine, **off by default**. Shows the state and connected players. Has a
+  PIN field for pairing a new client: the backend posts it to Sunshine's local API, so the web UI is
+  never needed on the device.
+- **Join:** lists hosts found on the LAN (Sunshine publishes `_nvstream._tcp` over mDNS,
+  `src/platform/linux/publish.cpp`), pairs, and starts the stream. It drives the Moonlight-qt CLI,
+  which has exactly these verbs: `moonlight pair <host> --pin NNNN` (the plugin picks the PIN and shows
+  it, the host user types it in their plugin), `moonlight list <host>`,
+  `moonlight stream <host> "Desktop"` (Sunshine's default app = the whole session, step 5),
+  `moonlight quit <host>` (`app/cli/commandlineparser.cpp:167-553`).
+- **Each paired host gets its own Steam tile** (user, 2026-11-20): Exe = moonlight-qt, options =
+  `stream <host> "Desktop"`. Launching from a tile gives the stream gamescope focus and Steam Input
+  like any game, so the plugin never spawns the stream itself. Pairing creates the tile, unpairing
+  removes it. Reuse the novadeck-stores mechanism, copied not imported (plugins cannot import each
+  other): tiles go through `SteamClient.Apps.AddShortcut` from the frontend and never by writing
+  shortcuts.vdf, the registry is the ownership, and the durable key is our token (here the host's
+  Sunshine UUID, not its name or IP, which change), never Steam's appid
+  (`novadeck-stores/py_modules/novadeck_stores/shortcuts.py`, `src/lib/shortcutBridge.ts`).
+  Step 4's generic Moonlight tile then becomes optional.
+- Security: Sunshine's web UI (47990) and stream ports LAN-only by default; credentials generated per
+  device, never shipped. Internet play (port forwarding or Tailscale) is documented, not automated.
+  Security review before merge (open ports, injected input, a root backend posting to a local API).
+
+### 8. novadeck to novadeck
+- The real target: an SM8250 host with a gen2 client, and the reverse. Latency and drops from
+  Moonlight's overlay, two players with pads.
+
+## Open questions
+- Does Steam offer the Remote Play Together invite on an Epic/GOG shortcut? Not checked; a yes covers
+  Steam friends without any of this.
+- Gen1 encode session count when Steam recording and Sunshine both want the encoder.
+- Panel rotation under KMS capture (AYANEO, Odin).
+- Whether Moonlight-qt's EGL renderer under gamescope's Xwayland gets a zero-copy import on freedreno.

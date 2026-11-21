@@ -98,6 +98,15 @@ stream piped back to the host; nothing written on the card.
   Against our tree, 0002-0004 apply and 0001 + 0005 do not: 1092 already gives gen2 `DISPLAY_DELAY`, so
   1/5 is regenerated on top of 1092 (or dropped where 1092 is identical), and 5/5 is rebased. Needed
   before the gen2 gates of step 2 (the decoder's CAPTURE pool, 2/5).
+  **Carried as `1108`** (2/5-5/5; 1/5 dropped, `1092` already covers every novadeck gen2 SoC; 5/5's last
+  hunk placed against `1102`, same behaviour). Builds clean. **Gen1 regression PASSED 2026-11-21** on the
+  Pocket Max (module sha256 a7b92b01): encode 11.98 Mbit/s at 1920x1080 with SPS/PPS per IDR; B-frame
+  VA-API decode 600/600 bit-exact, 413 fps; no iris lines in dmesg. **Gen2 PASSED 2026-11-21** on the
+  Pocket FIT (SM8650, same card and module): h264_vaapi CBR 12M at 11.95 Mbit/s and hevc_vaapi CBR 12M
+  at 12.00 Mbit/s, both 1920x1080, SPS/PPS on every IDR, decode cleanly on the host; VA-API decode of
+  the x264 B-frame stream and of that HEVC stream 600/600 bit-exact each, in order, "Format vaapi
+  chosen", ~740 and ~1100 fps; the 3/5 deblocking controls are listed; no iris lines in dmesg. No A/B
+  against a module without 1108 on gen2: the pass shows 1108 works, not which part qcom-va-driver needs.
 
 ### 2. qcom-va-driver package
 - **2a** Patch: send `BITRATE_PEAK` only when QUERYCTRL finds it (the pattern it already uses for

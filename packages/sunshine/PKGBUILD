@@ -1,0 +1,175 @@
+# sunshine — the Moonlight game-stream host (LizardByte, GPL-3.0).
+#
+# WHY IT IS HERE: a novadeck hosts Epic/GOG games for friends who join with Moonlight, the Remote
+# Play Together that Steam cannot offer for non-Steam games. Plan:
+# .claude/plans/sunshine-streaming.plan.md, step 3. Hardware encode goes through VA-API to
+# qcom-va-driver (packages/qcom-va-driver), so the service must run with LIBVA_DRIVER_NAME=qcom.
+#
+# WHY LOCAL: in neither holo nor Arch (AUR only). Written from upstream's
+# packaging/linux/Arch/PKGBUILD at the release tag, changed as follows:
+#
+#   FFmpeg is BUILT HERE, not downloaded. Upstream's CMake fetches a prebuilt static FFmpeg from
+#   LizardByte/build-deps releases. Sunshine cannot use the system FFmpeg instead: it links static
+#   libav* plus libcbs.a, FFmpeg's internal bitstream code that build-deps packages separately (the
+#   in-band SPS/VUI rewrite needs it). So build() runs build-deps (the submodule the release tag
+#   pins) from source with only what a VA-API host needs: libva, libx264 (the software fallback),
+#   CBS and the NV codec headers (header-only; Sunshine's CMake otherwise downloads them). Off: AMF
+#   and Media Foundation (Windows), CUDA, SVT-AV1 and x265 (software AV1/HEVC far too slow for
+#   these SoCs), Vulkan (turnip has no VK_KHR_video_*).
+#
+#   miniupnpc is built here as a static library: Sunshine requires it at link time and the pinned
+#   snapshot does not ship it. UPnP itself stays off in Sunshine's config by default. Sunshine's
+#   CMake links pkg-config's bare -lminiupnpc without its -L, so build() adds it to LDFLAGS.
+#
+#   Boost is NOT the system one: Sunshine asks for Boost EXACT 1.89.0 and falls back to fetching
+#   that release (URL_HASH-pinned in cmake/dependencies/Boost_Sunshine.cmake) and linking it
+#   statically. The snapshot's boost is a different version, so it is not a makedepend.
+#
+#   -DSUNSHINE_ENABLE_TRAY=OFF  no desktop tray in gamescope; drops Qt6 and appindicator.
+#   -DSUNSHINE_ENABLE_CUDA=OFF / _VULKAN=OFF  no NVIDIA, no Vulkan Video on Adreno.
+#   -DSUNSHINE_ENABLE_KWIN=OFF / _PORTAL=OFF  neither exists under gamescope; capture is step 5.
+#   DRM (KMS capture), Wayland and X11 capture stay on: step 5 decides between them.
+#   no setcap in an install hook: KMS capture needs cap_sys_admin, which assemble-rootfs.sh grants
+#   and guard-rootfs.sh checks if step 5 keeps KMS. A capability set by pacman in the image chroot
+#   is not asserted to survive into the image.
+#
+# SUBMODULES are fetched in prepare() at the commits the release tag records (git checks each
+# against its gitlink), as upstream does, restricted to what a Linux build reads.
+
+pkgname=sunshine
+pkgver=2026.914.233613
+_commit=63d35f702ee9e362e43263742981836ec0710384
+_miniupnpc=2_3_5
+pkgrel=1
+pkgdesc='Self-hosted game stream host for Moonlight'
+arch=('aarch64')
+url='https://github.com/LizardByte/Sunshine'
+license=('GPL-3.0-only')
+# Linked (readelf NEEDED) plus dlopened (avahi, libglvnd's EGL/GL, the libX* capture libs).
+depends=(
+  'avahi'
+  'curl'
+  'gcc-libs'
+  'glib2'
+  'glibc'
+  'libcap'
+  'libdrm'
+  'libevdev'
+  'libglvnd'
+  'libpulse'
+  'libva'
+  'libx11'
+  'libxcb'
+  'libxfixes'
+  'libxrandr'
+  'libxtst'
+  'mesa'
+  'openssl'
+  'opus'
+  'wayland'
+)
+makedepends=(
+  'cmake'
+  'git'
+  'nasm'
+  'nlohmann-json'
+  'nodejs'
+  'npm'
+  # cmake/dependencies/ffmpeg.cmake always links -lnuma; --as-needed then drops it, as build-deps'
+  # FFmpeg (--disable-autodetect) never calls libnuma. A link-time need only.
+  'numactl'
+  'python-jinja'
+  'wayland-protocols'
+)
+optdepends=('qcom-va-driver: hardware H.264/HEVC encode on iris (LIBVA_DRIVER_NAME=qcom)')
+# Static FFmpeg archives linked into a -flto build is a combination upstream never ships.
+options=('!lto')
+source=("${pkgname}::git+${url}.git#commit=${_commit}"
+        "miniupnp-miniupnpc_${_miniupnpc}.tar.gz::https://github.com/miniupnp/miniupnp/archive/refs/tags/miniupnpc_${_miniupnpc}.tar.gz")
+sha256sums=('SKIP'
+            '62858cfe25077481f53c54de51006f0e4eeb4528ddc81396d5fd37d5b664c9e2')
+
+_submodules=(
+  third-party/Simple-Web-Server
+  third-party/build-deps
+  third-party/glad
+  third-party/libdisplaydevice
+  third-party/libvirtualhid
+  third-party/lizardbyte-common
+  third-party/moonlight-common-c
+  third-party/wlr-protocols
+)
+
+prepare() {
+  cd "${pkgname}"
+  git submodule update --init --depth 1 -- "${_submodules[@]}"
+  local m
+  for m in moonlight-common-c libdisplaydevice libvirtualhid; do
+    git -C "third-party/${m}" submodule update --init --recursive --depth 1
+  done
+  # build-deps: only the two sources this trimmed FFmpeg compiles.
+  git -C third-party/build-deps submodule update --init --depth 1 -- \
+    third-party/FFmpeg/FFmpeg third-party/FFmpeg/x264
+}
+
+build() {
+  local deps="${srcdir}/deps"
+
+  cmake -S "miniupnp-miniupnpc_${_miniupnpc}/miniupnpc" -B build-miniupnpc -Wno-dev \
+    -D CMAKE_BUILD_TYPE=None \
+    -D CMAKE_INSTALL_PREFIX="${deps}" \
+    -D CMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -D UPNPC_BUILD_SHARED=OFF \
+    -D UPNPC_BUILD_TESTS=OFF \
+    -D UPNPC_BUILD_SAMPLE=OFF
+  cmake --build build-miniupnpc
+  cmake --install build-miniupnpc
+
+  cmake -S "${pkgname}/third-party/build-deps" -B build-deps -Wno-dev \
+    -D CMAKE_INSTALL_PREFIX="${deps}" \
+    -D BUILD_ALL=OFF \
+    -D BUILD_FFMPEG=ON \
+    -D BUILD_FFMPEG_AMF=OFF \
+    -D BUILD_FFMPEG_MF=OFF \
+    -D BUILD_FFMPEG_CUDA_LLVM=OFF \
+    -D BUILD_FFMPEG_SVT_AV1=OFF \
+    -D BUILD_FFMPEG_X265=OFF \
+    -D BUILD_FFMPEG_VULKAN=OFF
+  cmake --build build-deps
+  cmake --install build-deps
+
+  export BRANCH=master
+  export BUILD_VERSION="v${pkgver}"
+  export COMMIT="${_commit}"
+  export PKG_CONFIG_PATH="${deps}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+  export LDFLAGS="${LDFLAGS} -L${deps}/lib"
+
+  cmake -S "${pkgname}" -B build -Wno-dev \
+    -D CMAKE_BUILD_TYPE=Release \
+    -D CMAKE_INSTALL_PREFIX=/usr \
+    -D BUILD_DOCS=OFF \
+    -D BUILD_TESTS=OFF \
+    -D BUILD_WERROR=OFF \
+    -D FFMPEG_PREPARED_BINARIES="${deps}/ffmpeg" \
+    -D SUNSHINE_EXECUTABLE_PATH=/usr/bin/sunshine \
+    -D SUNSHINE_ASSETS_DIR=share/sunshine \
+    -D SUNSHINE_PUBLISHER_NAME='LizardByte' \
+    -D SUNSHINE_PUBLISHER_WEBSITE='https://app.lizardbyte.dev' \
+    -D SUNSHINE_PUBLISHER_ISSUE_URL='https://app.lizardbyte.dev/support' \
+    -D SUNSHINE_SYSTEM_WAYLAND_PROTOCOLS=ON \
+    -D SUNSHINE_ENABLE_TRAY=OFF \
+    -D SUNSHINE_ENABLE_CUDA=OFF \
+    -D CUDA_FAIL_ON_MISSING=OFF \
+    -D SUNSHINE_ENABLE_VULKAN=OFF \
+    -D SUNSHINE_ENABLE_KWIN=OFF \
+    -D SUNSHINE_ENABLE_PORTAL=OFF
+  cmake --build build
+}
+
+check() {
+  ./build/sunshine --version
+}
+
+package() {
+  DESTDIR="${pkgdir}" cmake --install build
+}

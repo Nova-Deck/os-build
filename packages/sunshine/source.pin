@@ -1,0 +1,6 @@
+# sunshine — local PKGBUILD (packages/sunshine/PKGBUILD). Not in holo or Arch. Builds its own
+# trimmed static FFmpeg from the build-deps submodule the release pins, and a static miniupnpc;
+# see the PKGBUILD header for why neither comes from the snapshot.
+name: sunshine
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

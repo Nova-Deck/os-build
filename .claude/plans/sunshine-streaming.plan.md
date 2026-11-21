@@ -127,6 +127,14 @@ stream piped back to the host; nothing written on the card.
 ### 3. Sunshine package (host)
 - `packages/sunshine` from the upstream Arch PKGBUILD, CUDA off, built against our FFmpeg with VA-API
   (not LizardByte's prebuilt; check `FFMPEG_PREPARED_BINARIES`).
+- **Built 2026-11-21, stable v2026.914.233613** (the local `_reference` tag v2026.1120.12055 is not upstream).
+  "Our FFmpeg" is impossible: Sunshine links static libav* plus `libcbs.a` (FFmpeg's internal CBS, which
+  only build-deps packages). So the PKGBUILD builds the build-deps submodule the tag pins, from source,
+  BUILD_ALL=OFF + FFmpeg only (vaapi + libx264 + cbs; AMF/MF/CUDA_LLVM/SVT-AV1/x265/Vulkan off).
+  build-deps still enables nvenc (header-only) and `h264_v4l2m2m`. Boost is not ours either: Sunshine
+  wants Boost EXACT 1.89.0, the snapshot has 1.91, so it fetches 1.89.0 (URL_HASH-pinned) and links it
+  static. miniupnpc is built static in the PKGBUILD (not in the snapshot). Linkage checked: no ICU, no numa.
+  The package ships a udev rule (uinput/uhid to group `input` + uaccess) and `modules-load.d` uhid.
 - **Gate:** Sunshine's encoder probe picks `vaapi` H.264 (log), and a LAN Moonlight client on a PC
   streams the session.
 

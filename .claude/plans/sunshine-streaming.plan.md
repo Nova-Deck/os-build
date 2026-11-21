@@ -151,6 +151,16 @@ stream piped back to the host; nothing written on the card.
   - **Web UI by LAN IP is CSRF-blocked:** only localhost origins are allowed by default; the test added
     `csrf_allowed_origins = https://<ip>:47990`. Whatever owns Sunshine's config (step 7) must set it, or pair
     another way.
+  - **OPEN: stream sometimes black at start until the mouse moves** (user report). Host log of the one
+    session: Moonlight sent 10 IDR requests in 2.2 s after connect (~every 270 ms), Sunshine answered each
+    with an IDR ~14 ms later at ~60 fps, then requests stopped at frame 139 and the stream stayed healthy.
+    So the client discarded those IDRs. Mouse input began at +0.06 s, so the log cannot tie the recovery to
+    the mouse. Two candidates: (1) a forced HEVC IDR on gen2 does not start with VPS: moonlight-common-c
+    only accepts an HEVC IDR whose first NAL is a VPS (`VideoDepacketizer.c:469-480`) and loops on "Waiting
+    for IDR frame"; step 1c checked per-IDR headers on gen1 H.264 only. (2) the PC's decoder rejects them.
+    Next: the PC's Moonlight log at a reproduction (`%TEMP%\Moonlight-*.log` on Windows), H.264 vs HEVC in
+    Moonlight's settings, and on a dev card `ffmpeg -c:v hevc_vaapi -force_key_frames` with the headers of
+    every keyframe dumped (trace_headers bsf).
   - **No mDNS** (avahi-daemon disabled in the image, above). Proposed fix (publish through systemd-resolved) in step 7, not tested yet.
 - **Gate:** Sunshine's encoder probe picks `vaapi` H.264 (log), and a LAN Moonlight client on a PC
   streams the session.

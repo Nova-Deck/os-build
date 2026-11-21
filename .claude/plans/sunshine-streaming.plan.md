@@ -49,9 +49,23 @@ User decisions (2026-11-20):
 
 ## Steps
 
-### 0. Measure SM8250 before writing code (read-only on the Pocket Max)
-- Encode a clip with ffmpeg `h264_v4l2m2m` and count SPS/PPS per IDR. That confirms or refutes that gen1
-  already emits headers on every IDR. **Gate for 1a.**
+### 0. Measure SM8250 before writing code (read-only on the Pocket Max) — DONE 2026-11-21, gate PASSED
+Pocket Max, release v0.10.10 (fdeca0a), kernel 7.3.5, as `deck` over SSH. 1080p NV12, 150 frames,
+stream piped back to the host; nothing written on the card.
+
+| Run | Keyframes | SPS/PPS in front |
+|---|---|---|
+| `v4l2-ctl`, GOP 30, `HEADER_MODE` joined (default) | frame 0 IDR; 30/60/90/120 are **non-IDR I slices** | frame 0 only |
+| ffmpeg `h264_v4l2m2m`, `-force_key_frames` 45,100 (it forces SEPARATE) | IDR at 45 and 100 | frame 0 only |
+| Python V4L2 probe, joined, `FORCE_KEY_FRAME` before frames 45 and 100 | IDR at 45 and 100 | **every IDR** |
+
+- **Gen1 already emits SPS+PPS with every IDR in joined mode.** 1a only has to expose the control.
+- `FORCE_KEY_FRAME` gives a real IDR on the requested frame. The GOP never does after frame 0, so
+  on-demand IDRs (Sunshine's model) are the only path that produces in-band headers.
+- Separate mode turns per-IDR headers off, so ffmpeg `h264_v4l2m2m` is useless here, as expected.
+- Side finding: the SPS says `level_idc=10` (level 1) at 1080p, which is the `h264_level` default.
+  Check what qcom-va-driver sets, and whether Moonlight cares (step 2 gate).
+- Controls on the 7.3.5 gen1 encoder: no `PREPEND_SPSPPS_TO_IDR`, no `BITRATE_PEAK`, as read from source.
 
 ### 1. Kernel, iris gen1 (free slots: 1104, 1106-1109)
 - **1a** (host) Expose `PREPEND_SPSPPS_TO_IDR` on gen1, folded into the existing

@@ -70,6 +70,10 @@ stream piped back to the host; nothing written on the card.
 ### 1. Kernel, iris gen1 (free slots: 1104, 1106-1109)
 - **1a** (host) Expose `PREPEND_SPSPPS_TO_IDR` on gen1, folded into the existing
   `SYNC_FRAME_SEQUENCE_HEADER` setter (mirrors `iris_set_header_mode_gen2`).
+  **DONE: `1104`, HW-passed 2026-11-21** on the Pocket Max (dev card 20261121T094634Z, qcom-iris.ko
+  sha256 aa14b639 = the build). The control is listed (`prepend_sps_and_pps_to_idr`). With IDRs
+  forced at 45 and 100: separate + PREPEND=1 gives SPS/PPS before every IDR; separate + PREPEND=0
+  gives them before frame 0 only (unchanged); joined unchanged (every IDR). No iris errors in dmesg.
 - **1b** (client) `DEC_DISPLAY_DELAY(_ENABLE)` on gen1 via `HFI_PROPERTY_PARAM_VDEC_OUTPUT_ORDER`, ported
   from venus. Extend 1092's low-latency decode to gen1 if the stage/OPP logic applies there.
 - **Not in the kernel:** `BITRATE_PEAK`. A control that is accepted but never sent would mislead; see 2a.

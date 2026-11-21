@@ -135,6 +135,23 @@ stream piped back to the host; nothing written on the card.
   wants Boost EXACT 1.89.0, the snapshot has 1.91, so it fetches 1.89.0 (URL_HASH-pinned) and links it
   static. miniupnpc is built static in the PKGBUILD (not in the snapshot). Linkage checked: no ICU, no numa.
   The package ships a udev rule (uinput/uhid to group `input` + uaccess) and `modules-load.d` uhid.
+- **Probe PASSED 2026-11-21, Pocket FIT** (`pacman -U` on the 1108 dev card; root, `LIBVA_DRIVER_NAME=qcom`,
+  `encoder = vaapi`, KMS capture of DSI-1, under gamescope): "Found H.264 encoder: h264_vaapi [vaapi]" and
+  "Found HEVC encoder: hevc_vaapi [vaapi]", both VUI_PARAMETERS supported; vendor "Iris V4L2 stateful VA-API
+  backend", EncSlice, CBR. No AV1, no HEVC Main10 (no HDR). Warning "Driver does not support some wanted
+  packed headers" is expected (SPS/PPS come from PREPEND). avahi-daemon is disabled in the image, so
+  Sunshine cannot publish mDNS ("Failed to create client: Daemon not running"): Moonlight must add the host
+  by IP until step 7 decides.
+- **GATE PASSED 2026-11-21:** a LAN PC Moonlight paired (host added by IP, PIN in the web UI) and streamed
+  the FIT's Desktop: session encoder `hevc_vaapi` on iris, 14.99 Mbit/s CBR, SDR Rec. 709 8-bit, KMS grab of
+  DSI-1 under gamescope. Found on the way, all for steps 5-7:
+  - **No audio:** run as root, Sunshine gets "Couldn't connect to pulseaudio: Access denied" (the user's
+    pipewire-pulse). It must run in the deck user's session, which then needs cap_sys_admin for KMS
+    (or another capture path): step 5.
+  - **Web UI by LAN IP is CSRF-blocked:** only localhost origins are allowed by default; the test added
+    `csrf_allowed_origins = https://<ip>:47990`. Whatever owns Sunshine's config (step 7) must set it, or pair
+    another way.
+  - **No mDNS** (avahi-daemon disabled in the image, above).
 - **Gate:** Sunshine's encoder probe picks `vaapi` H.264 (log), and a LAN Moonlight client on a PC
   streams the session.
 

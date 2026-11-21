@@ -1,0 +1,9 @@
+# gtk2 — local PKGBUILD: Valve's (Arch's) gtk2-2.24.33-5 recipe from mash-20260528.1.pvt, unchanged.
+# The public mash stopped carrying gtk2 at mash-20260704; see the PKGBUILD header.
+#
+# The recipe applies its own two patches in prepare() (XID-collision warning severity; CVE-2024-6655
+# stop loading modules from cwd), so they are local_sources, not patches:.
+name: gtk2
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1
+local_sources: gtk-query-immodules-2.0.hook 0001-Lower-severity-of-XID-collision-warnings.patch 0002-Stop-looking-for-modules-in-cwd.patch

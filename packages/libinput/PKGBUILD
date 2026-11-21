@@ -1,8 +1,8 @@
 # libinput-tools WITHOUT the debug GUI — the `libinput` CLI our power-key scripts drive, minus gtk4.
 #
-# Recipe source: the pinned snapshot's own libinput-1.31.2-1 (Arch's), read from
-# archlinux-deckard/archlinux/mash-20260528.1.pvt/sources/packages/libinput-1.31.2-1.src.tar.gz
-# (sha256 fe72f25e6141cc90d6fb0c6f8abd0557860a843a7a82a5efbbabce5860d51a33).
+# Recipe source: the pinned snapshot's own libinput-1.31.3-1 (Arch's), read from
+# archlinux-deckard/archlinux/mash-20260704.1.pvt/sources/packages/libinput-1.31.3-1.src.tar.gz
+# (sha256 69b440db4c53932a8870c38f657ccb3f15f8b1f2a3ec6bdd0c2ce0d5116f7740).
 #
 # Why we build it: from 1.30 Arch splits the CLI (/usr/bin/libinput, /usr/lib/libinput/*) out of
 # `libinput` into `libinput-tools`, and that package depends on gtk4 for ONE tool, `debug-gui` —
@@ -26,7 +26,7 @@
 #     man, zsh) and deletes the rest of the install, which the snapshot's libinput already owns.
 
 pkgname=libinput-tools
-pkgver=1.31.2
+pkgver=1.31.3
 pkgrel=1
 pkgdesc="Input device management and event handling library (debug utilities, no GUI)"
 url="https://wayland.freedesktop.org/libinput/doc/latest/"
@@ -56,7 +56,7 @@ makedepends=(
 source=(
   "git+https://gitlab.freedesktop.org/libinput/libinput.git#tag=$pkgver"
 )
-b2sums=('8b0a76d3765e06283000745a91c95fecc8d2bfc7da36222ad0def041282f237ebd56006d11efd87c845a936631fea527666fee99b6e9e1e2f176681ff083ac9a')
+b2sums=('197f8c4d6be126e8b8a4825109dd37405a1205f80b25595c259d42606e317525aae5def846f4bb3c3cfad09ccd9d65b53d39d34127623ea6c47db6e8cfaf3188')
 
 build() {
   local meson_options=(

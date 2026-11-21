@@ -98,10 +98,11 @@ glob usr/share/locale/!(C|en|en_US)
 # and no longer pulls the Go and D runtimes (libgo, libgphobos, libgdruntime) at all; their rows
 # were dropped when they stopped matching anything.
 glob usr/lib/libgfortran.so.*
-# The sanitizer runtimes (-fsanitize=address/thread/leak/undefined). Development tooling: a
-# sanitized binary links them explicitly, and we ship none. `@(...)` is extglob for exactly one
-# of the alternatives.
-glob usr/lib/lib@(a|t|l|ub)san.so.*
+# The sanitizer runtimes (-fsanitize=address/thread/leak/undefined/hwaddress). Development tooling:
+# a sanitized binary links them explicitly, and we ship none. `@(...)` is extglob for exactly one
+# of the alternatives. libhwasan (aarch64's hardware-assisted ASan) arrived as its own gcc-libs
+# split with mash-20260704.
+glob usr/lib/lib@(a|t|l|ub|hw)san.so.*
 #
 # libgomp is deliberately NOT here despite looking like the same kind of thing: it is OpenMP, and
 # it IS linked — by libb2, libsoxr, libvidstab and the fftw *_omp variants that ffmpeg pulls in.

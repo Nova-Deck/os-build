@@ -226,5 +226,17 @@ else
   bad "a package-fixed low id failed assertion 8: $out"
 fi
 
+# systemd 261 ships `u! systemd-imds -`; the pin restates it as `u!`, which both loops must read as a `u`.
+stage="$TMP/ids-locked"; idstage "$stage" $'systemd-imds:x:965:\n'
+printf 'u! systemd-imds 965 "systemd Instance Metadata" -\n' \
+  >>"$stage/usr/lib/sysusers.d/01-novadeck-enforce-ids.conf"
+printf 'systemd-imds:x:965:965::/:/usr/bin/nologin\n' >>"$stage/etc/passwd"
+out="$(guard8 "$stage")"
+if grep -q '3 pinned system ids match' <<<"$out"; then
+  ok "a \`u!\` (fully locked) pin counts as pinned, user and group"
+else
+  bad "a \`u!\` pin was not read as a pin by assertion 8: $out"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

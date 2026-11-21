@@ -1,7 +1,12 @@
 # criu — checkpoint/restore, a hard dependency of crun (the Steam Frame's crun depends on it too).
-# Part of the Lepton container stack built here (packages/podman/PKGBUILD). Recipe UNCHANGED from
+# Part of the Lepton container stack built here (packages/podman/PKGBUILD). Recipe from
 # archlinux-deckard/archlinux/mash-20260305/sources/packages/criu-4.2-3.src.tar.gz
 # (sha256 b63b74591a81e1e81d1af3a956640840885b8fdefdf7c7f8ee2fe7c0afd4e4df).
+#
+# One deviation: prepare() also cherry-picks upstream 529e72b1 (in v4.2.1). criu's
+# NO_LIBC_RSEQ_DEFS feature test redefined `enum rseq_cpu_id_state` identically, which gcc
+# accepts, so the probe always passed and criu defined the rseq enums itself; against the glibc
+# headers in mash-20260704 that fails with "conflicting redefinition of enum 'enum rseq_flags'".
 #
 # Maintainer: George Rawlinson <grawlinson@archlinux.org>
 # Maintainer: Carl Smedstad <carsme@archlinux.org>
@@ -60,6 +65,8 @@ b2sums=('b13f87a8f2978d1d7be94e39b3b5a02155fbf11473dae57ab1512fb49a0f683c00c09d8
 prepare() {
   # Fix -Werror=discarded-qualifiers build failure in tty.c
   git -C $pkgname cherry-pick -n 90300748effc1cf0fe56e35d3d1cc2ddfedab246
+  # novadeck: fix the libc rseq-definitions probe (upstream 529e72b1, criu v4.2.1)
+  git -C $pkgname cherry-pick -n 529e72b16a376295980ff69eeee6985f0efed62b
 }
 
 build() {

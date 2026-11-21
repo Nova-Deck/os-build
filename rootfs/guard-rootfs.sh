@@ -696,7 +696,8 @@ else
   # Fields: <type> <name> <id> ... — only `u` and `g` lines carry an id we pin. A `-` id would mean
   # "allocate", which is the thing this file exists to prevent, so it is a failure and not a skip.
   while read -r kind name id _rest; do
-    case "$kind" in u|g) ;; *) continue ;; esac
+    # `u!` is a `u` whose account sysusers also locks fully (systemd 257+; systemd-imds uses it).
+    case "$kind" in u!) kind=u ;; u|g) ;; *) continue ;; esac
     [ -n "${id:-}" ] || continue
     if [ "$id" = "-" ]; then
       ids_ok=0
@@ -730,7 +731,7 @@ else
   # id in the range and passes silently — and moves the next time the set changes. That is what
   # systemd 259's `g empower -` did (and rtkit dropping its fixed 133): caught by the relock, not here.
   # 900-999 is the band sysusers counts down through; fixed package ids (dbus 81, polkitd 102) sit below.
-  pinned_names=" $(grep -vE '^[[:space:]]*(#|$)' "$IDPIN" | awk '$1 ~ /^[ug]$/ { printf "%s ", $2 }')"
+  pinned_names=" $(grep -vE '^[[:space:]]*(#|$)' "$IDPIN" | awk '$1 ~ /^(u!?|g)$/ { printf "%s ", $2 }')"
   for which in passwd group; do
     case "$which" in passwd) file="$PASSWD" ;; group) file="$GROUP" ;; esac
     while IFS=: read -r name _pw id _rest; do

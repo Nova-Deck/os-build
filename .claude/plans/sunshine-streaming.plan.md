@@ -76,6 +76,12 @@ stream piped back to the host; nothing written on the card.
   gives them before frame 0 only (unchanged); joined unchanged (every IDR). No iris errors in dmesg.
 - **1b** (client) `DEC_DISPLAY_DELAY(_ENABLE)` on gen1 via `HFI_PROPERTY_PARAM_VDEC_OUTPUT_ORDER`, ported
   from venus. Extend 1092's low-latency decode to gen1 if the stage/OPP logic applies there.
+  **DONE: `1107`, HW-passed 2026-11-21** (module swapped on the dev card, sha256 9249f39f). 1092's
+  stage/OPP logic already reached gen1 (its decoder caps use the shared `iris_set_stage`), so 1107 only
+  adds the controls and the gen1 packing. Through qcom-va-driver, `-hwaccel vaapi`: the 1080p60 CBR
+  stream at ~650 fps; a libx264 1080p60 stream with 441 B-frames out of 600 at 422 fps, and all 600
+  frames bit-exact (framemd5 of NV12) against the host's software decode, in display order.
+  No iris lines in dmesg.
 - **1d** (host, found at the step 2 gate) `1106`: the gen1 encoder sends the visible size as
   `FRAME_SIZE`, as venus does. Before it, a 1080p encode was 1920x1088 with no SPS cropping.
   **HW-passed 2026-11-21** (module swapped on the dev card, sha256 51edb3e9; the 1104 module is kept at

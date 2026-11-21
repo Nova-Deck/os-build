@@ -151,7 +151,7 @@ stream piped back to the host; nothing written on the card.
   - **Web UI by LAN IP is CSRF-blocked:** only localhost origins are allowed by default; the test added
     `csrf_allowed_origins = https://<ip>:47990`. Whatever owns Sunshine's config (step 7) must set it, or pair
     another way.
-  - **No mDNS** (avahi-daemon disabled in the image, above).
+  - **No mDNS** (avahi-daemon disabled in the image, above). Proposed fix (publish through systemd-resolved) in step 7, not tested yet.
 - **Gate:** Sunshine's encoder probe picks `vaapi` H.264 (log), and a LAN Moonlight client on a PC
   streams the session.
 
@@ -199,6 +199,17 @@ not a section of an existing panel. Two halves:
   Sunshine UUID, not its name or IP, which change), never Steam's appid
   (`novadeck-stores/py_modules/novadeck_stores/shortcuts.py`, `src/lib/shortcutBridge.ts`).
   Step 4's generic Moonlight tile then becomes optional.
+- **Proposed: mDNS publish through systemd-resolved, not avahi** (my recommendation, 2026-11-21; the
+  user asked for it in the plan, to be tested later, not yet chosen). Sunshine's Linux
+  publisher only talks to avahi-daemon (`publish.cpp` dlopens libavahi-client), and the image keeps
+  avahi-daemon disabled: systemd-resolved owns UDP 5353 with mDNS on and answers `novadeck.local`. Steam
+  Remote Play is unaffected because Steam discovers over its own UDP 27036 broadcast. Plan: the plugin
+  writes `/etc/systemd/dnssd/sunshine.dnssd` (`Type=_nvstream._tcp`, `Port=47989`, `Name=%H`) and reloads
+  resolved when it starts Sunshine, and removes it when it stops it, so the advert follows the host
+  toggle. Alternative not recommended: enabling avahi-daemon (two responders on 5353; doing it right means turning resolved's
+  mDNS off and adding nss-mdns for `novadeck.local`, a system-wide change). Possible later: a Sunshine
+  patch registering through resolved's D-Bus `RegisterService`, so the advert follows Sunshine itself
+  (upstreamable). Test first: a `.dnssd` on a dev card, then the PC Moonlight lists the host unasked.
 - Security: Sunshine's web UI (47990) and stream ports LAN-only by default; credentials generated per
   device, never shipped. Internet play (port forwarding or Tailscale) is documented, not automated.
   Security review before merge (open ports, injected input, a root backend posting to a local API).

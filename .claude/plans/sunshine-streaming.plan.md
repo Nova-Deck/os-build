@@ -78,6 +78,10 @@ stream piped back to the host; nothing written on the card.
   from venus. Extend 1092's low-latency decode to gen1 if the stage/OPP logic applies there.
 - **1d** (host, found at the step 2 gate) `1106`: the gen1 encoder sends the visible size as
   `FRAME_SIZE`, as venus does. Before it, a 1080p encode was 1920x1088 with no SPS cropping.
+  **HW-passed 2026-11-21** (module swapped on the dev card, sha256 51edb3e9; the 1104 module is kept at
+  `/var/tmp/qcom-iris-1104.ko`): `h264_vaapi` CBR 12M at 1920x1080 and 1280x720, both on target. PSNR
+  against the reference equals the 1088 run's top 1080 rows (26.81 vs 26.82 dB luma), so the firmware
+  crops rather than rescales. iris decodes the stream back (600/600); no iris lines in dmesg.
 - **Not in the kernel:** `BITRATE_PEAK`. A control that is accepted but never sent would mislead; see 2a.
 - **1c (gen2) Carry Radxa's series. Do not drop it** (user, 2026-11-21): "[PATCH 0/5] media: iris: HFI gen2
   features and fixes for VA-API", Xilin Wu, v1 2026-10-29,

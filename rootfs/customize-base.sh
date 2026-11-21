@@ -317,7 +317,12 @@ BOOTSTRAP_PKGS=(base)
 # lookup fails that way — indistinguishable from a genuinely absent layer, which is the failure
 # packages/fossilize-stub-android exists to prevent. ~1.1 MB (jq + oniguruma).
 # Measured 2026-08-29 on a Pocket ACE, Lepton v2.8.9 (issue #58).
-PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-mesa-layers vulkan-tools novadeck-gpu-priority mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject legendary gogdl boxtron scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2 f3 upower libinput-tools podman crun passt fuse-overlayfs which inotify-tools jq)
+#
+# qcom-va-driver: VA-API over the iris V4L2 codec, for Sunshine (host encode) and Moonlight (client
+# decode). Overlay-built (packages/qcom-va-driver/) WITHOUT the msm_drv_video.so alias, so libva's
+# DRM-name fallback never picks it: only a client that sets LIBVA_DRIVER_NAME=qcom loads it, and
+# Steam, CEF, Remote Play and recording see no change. Plan: .claude/plans/sunshine-streaming.plan.md.
+PKGS=(wpa_supplicant wireless-regdb openssh vulkan-icd-loader vulkan-freedreno vulkan-mesa-layers vulkan-tools novadeck-gpu-priority mesa gamescope seatd sddm mangohud lsfg-vk fex-emu bluez bluez-utils networkmanager alsa-ucm-conf pipewire wireplumber pipewire-pulse pipewire-alsa rtkit unzip openal gtk2 ffmpeg e2fsprogs xorg-xwayland lsof noto-fonts noto-fonts-cjk noto-fonts-emoji python python-gobject legendary gogdl boxtron scx-scheds rauc btrfs-progs rsync earlyoom zram-generator udisks2 f3 upower libinput-tools podman crun passt fuse-overlayfs which inotify-tools jq qcom-va-driver)
 
 # Dev-only packages — installed ONLY under NOVADECK_DEV=1, NEVER in a release base.
 # On-device bring-up tools: evtest reads raw /dev/input events; usbutils provides lsusb.

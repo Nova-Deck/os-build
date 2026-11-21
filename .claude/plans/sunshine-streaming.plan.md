@@ -76,9 +76,18 @@ stream piped back to the host; nothing written on the card.
   gives them before frame 0 only (unchanged); joined unchanged (every IDR). No iris errors in dmesg.
 - **1b** (client) `DEC_DISPLAY_DELAY(_ENABLE)` on gen1 via `HFI_PROPERTY_PARAM_VDEC_OUTPUT_ORDER`, ported
   from venus. Extend 1092's low-latency decode to gen1 if the stage/OPP logic applies there.
+- **1d** (host, found at the step 2 gate) `1106`: the gen1 encoder sends the visible size as
+  `FRAME_SIZE`, as venus does. Before it, a 1080p encode was 1920x1088 with no SPS cropping.
 - **Not in the kernel:** `BITRATE_PEAK`. A control that is accepted but never sent would mislead; see 2a.
-- Gen2: 1092 covers decode order. Take Radxa 0002 (capture pool) if the driver asks for it, 0003-0004 on
-  merit, and 0005 only for AV1; skip 0001.
+- **1c (gen2) Carry Radxa's series. Do not drop it** (user, 2026-11-21): "[PATCH 0/5] media: iris: HFI gen2
+  features and fixes for VA-API", Xilin Wu, v1 2026-10-29,
+  `<20261029-iris-va-fixes-v1-0-44a2783f782b@radxa.com>`. `b4 am -c` on 2026-11-21: v1 is still the latest.
+  Trailers: 1/5 Ack Dufresne, 4/5 Reviewed-by O'Donoghue. bod 2026-11-17: "close to mergable" once the
+  comments are addressed. Open review: 2/5 (why decoder-only, put the max in the platform data),
+  5/5 (fluster results asked for). One squashed patch in the 109x/110x media band, header listing all 5.
+  Against our tree, 0002-0004 apply and 0001 + 0005 do not: 1092 already gives gen2 `DISPLAY_DELAY`, so
+  1/5 is regenerated on top of 1092 (or dropped where 1092 is identical), and 5/5 is rebased. Needed
+  before the gen2 gates of step 2 (the decoder's CAPTURE pool, 2/5).
 
 ### 2. qcom-va-driver package
 - **2a** Patch: send `BITRATE_PEAK` only when QUERYCTRL finds it (the pattern it already uses for
@@ -87,6 +96,11 @@ stream piped back to the host; nothing written on the card.
 - **2c** **Limit the blast radius: no `msm` alias at first.** Sunshine and Moonlight each set
   `LIBVA_DRIVER_NAME=qcom` in their own launch env, so Steam, CEF, Remote Play and recording see no
   change. A system-wide alias is a later, separately A/B'd decision.
+- **SM8250 encode, 2026-11-21** (package installed with `pacman -U` on the 1104 dev card): libva loads
+  `qcom` only with `LIBVA_DRIVER_NAME=qcom`; without it libva tries `msm_drv_video.so` and fails, as
+  intended. `h264_vaapi` 1080p60 `testsrc2`, 10 s: CBR 12M -> 11.98 Mbit/s, VBR 8M -> 8.01 Mbit/s, 392 fps
+  (6.5x real time). Streams decode clean, High@5.2, SPS/PPS on every IDR. **Defect: 1920x1088** -> `1106`.
+  `libva-utils` (vainfo) is not in the pinned snapshot; the gate uses ffmpeg's VA-API device instead.
 - **Gates (SM8250 first, then one gen2):** `vainfo` lists `VAEntrypointVLD` and `VAEntrypointEncSlice` for
   H.264. `ffmpeg -c:v h264_vaapi` holds the asked bitrate (the gen1 rate-control history: 1098).
   `ffmpeg -hwaccel vaapi` decodes a 1080p60 stream in real time.

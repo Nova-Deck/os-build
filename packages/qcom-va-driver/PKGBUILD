@@ -1,0 +1,55 @@
+# qcom-va-driver — a VA-API driver over the iris V4L2 codec (Radxa, MIT).
+#
+# WHY IT IS HERE: Sunshine (host) and Moonlight-qt (client) reach hardware video through VA-API,
+# and Mesa has no VA driver for freedreno. This one drives iris directly: H.264/HEVC encode with
+# DMABUF import, H.264/HEVC/VP9/AV1 decode with DMABUF export (zero-copy for Moonlight's EGL path).
+# Plan: .claude/plans/sunshine-streaming.plan.md, step 2.
+#
+# WHY LOCAL: in neither holo nor Arch. Written from upstream's packaging/arch/PKGBUILD, trimmed:
+#
+#   -Dcdsp_vpp=disabled    its CDSP scaler needs QAIC + the Hexagon SDK, downloaded at build time,
+#                          and a signed DSP skeleton. Neither Sunshine nor Moonlight needs VA scaling:
+#                          Sunshine converts to NV12 with its own shaders.
+#   -Dvulkan_vpp=disabled  same reason; drops glslang and the Vulkan dependency.
+#   -Dv4l2_symlink=false   the pre-rename driver name; we never shipped it.
+#   no GStreamer env files upstream drops into environment.d / profile.d: nothing here uses gst-va.
+#
+# NO SYSTEM-WIDE SELECTION: package() deletes msm_drv_video.so. libva falls back to the DRM driver
+# name, and on our devices that is "msm", so the symlink would hand this driver to EVERY VA client:
+# Steam, CEF, its Remote Play and recording. Only clients that set LIBVA_DRIVER_NAME=qcom load it.
+# A system-wide default is a separate, A/B'd decision.
+#
+# Version: master 0980a1d, one commit past v1.1.1: the rename to qcom_drv_video.so, which is what
+# makes LIBVA_DRIVER_NAME=qcom work.
+
+pkgname=qcom-va-driver
+_commit=0980a1decf26d34c9aa71cd0a4a0d25703a7a17f
+pkgver=1.1.1.r1.g0980a1d
+pkgrel=1
+pkgdesc='VA-API driver for the Qualcomm iris V4L2 decoder and H.264/HEVC encoder'
+arch=('aarch64')
+url='https://github.com/radxa-pkg/qcom-va-driver'
+license=('MIT')
+depends=('glibc' 'gcc-libs' 'libva' 'libdrm' 'mesa' 'libglvnd')
+makedepends=('meson' 'ninja')
+source=("${pkgname}-${_commit}.tar.gz::${url}/archive/${_commit}.tar.gz")
+sha256sums=('ad1123de8e5af73e5534a5275ded6281fab485768fdd83c10c69eba6ef1c344d')
+
+prepare() {
+  cd "${pkgname}-${_commit}"
+}
+
+build() {
+  arch-meson "${pkgname}-${_commit}" build \
+    -Dgpu_copy=enabled \
+    -Dcdsp_vpp=disabled \
+    -Dvulkan_vpp=disabled \
+    -Dv4l2_symlink=false \
+    -Dtests=false
+  meson compile -C build
+}
+
+package() {
+  DESTDIR="${pkgdir}" meson install -C build --no-rebuild
+  rm "${pkgdir}/usr/lib/dri/msm_drv_video.so"
+}

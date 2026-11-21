@@ -1,0 +1,11 @@
+# qcom-va-driver — local PKGBUILD (packages/qcom-va-driver/PKGBUILD), built from the upstream
+# commit tarball. Not in holo or Arch. See the PKGBUILD header for the trims and for why the
+# `msm` alias is removed.
+#
+# Patches:
+#   0001  send V4L2_CID_MPEG_VIDEO_BITRATE_PEAK only when the encoder lists it. HFI gen1 (SM8250)
+#         has no peak control, so every rate-controlled session failed to open. To offer upstream.
+name: qcom-va-driver
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1
+patches: 0001-encoder-set-the-peak-bitrate-only-when-iris-has-the-control.patch

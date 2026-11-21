@@ -405,6 +405,7 @@ python-pycryptodomex 3.23.0-3 aarch64 snapshot 0441ab41851c803f50ee091de17e79ed5
 python-requests 2.34.2-1 any snapshot c68bd3e88d84a5bb17f117fad7433d6148e73f7dd6fa909ea0af764ac3fc473d
 python-requests-futures 1.0.2-1 any snapshot 1c04130d3b86b53dfa619b26c99ef39cf61c8631d7c35d9f3c92d5551f696929
 python-urllib3 2.7.0-1 any snapshot 144c6af78b8103eded24190084873c666704214c34b882184cde4933586e8af6
+qcom-va-driver 1.1.1.r1.g0980a1d-1.1 aarch64 novadeck 45cacfbe2dd569c15650d848a647085f971dd51ee019cc8b0fb1700d971e5ec8
 qt6-base 6.11.1-1 aarch64 snapshot 621e52bb6a225877f17d96c61a3db6e3abf85360d392102ec44b51af45b6d98a
 qt6-declarative 6.11.1-3 aarch64 snapshot ae35799a741ace923c2ca38c647f03586f862443f28d21ec0b251b485c8290b8
 qt6-translations 6.11.1-1 any snapshot 4c2128eac4fad8eaa79cbfd68309d25bd1fec76be8c838a4b946f80367d80d73

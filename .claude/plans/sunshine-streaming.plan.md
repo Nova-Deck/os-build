@@ -170,6 +170,15 @@ stream piped back to the host; nothing written on the card.
     `SYNC_FRAME_REQUEST_WITH_PREFIX_SEQ_HDR`. So the encoder answers with good IDRs; what the client
     does with them is next (candidate 2, or loss on the way).
     Not chased on the PC client: tracked only if it shows up with a novadeck client (step 8).
+    **ROOT CAUSE FOUND 2026-11-22 (FIT host, Pocket Max client): KMS capture grabbed gamescope's overlay
+    plane.** It showed up on the Max as black after ~10 s idle, or on any D-pad input (on either device),
+    back on a touch of the Max (a mouse event). The FIT's CRTC scans out two full-screen planes: plane-1
+    (zpos 0, the picture) and plane-2 (zpos 1, the mostly transparent overlay); gamescope composes them
+    into one only when it has to. kmsgrab counts every non-cursor plane with a framebuffer as a monitor
+    (`kmsgrab.cpp` monitor enumeration and `init()` at 63d35f7), so DSI-1 mapped to "monitor index 1" =
+    plane-2. Proven by forcing composition (`GAMESCOPE_COMPOSITE_FORCE=1` on `:0`'s root, Sunshine
+    `output_name = 0`): the stream held through idle, D-pad and the QAM. Forcing composition is NOT the fix
+    (user: it costs the host its direct scanout); the fix is in the capture, step 5.
   - **No mDNS** (avahi-daemon disabled in the image, above). Proposed fix (publish through systemd-resolved) in step 7, not tested yet.
 - **Gate:** Sunshine's encoder probe picks `vaapi` H.264 (log), and a LAN Moonlight client on a PC
   streams the session.
@@ -182,6 +191,30 @@ stream piped back to the host; nothing written on the card.
   Controller input reaches the host.
 - **Fallback if VA-API decode fails on a SoC:** `h264_v4l2m2m` with its CPU copy. Measure it on that SoC
   before accepting it (the CEF verdict).
+- **Built 2026-11-22 (72b044b), moonlight-qt 6.2.0** from the release source tarball. Tested with the FIT
+  as host and the Pocket Max (SM8250) as client, launched from a Steam shortcut made from a `.desktop`
+  (`Exec=env LIBVA_DRIVER_NAME=qcom moonlight`, added with `steam://addnonsteamgame/`):
+  - **VA-API decode on SM8250: PASSED.** `Renderer 'EGL/GLES' with 'VAAPI' backend chosen`, HEVC Main,
+    `Direct mapping possible` (nv12 surfaces imported by EGL, no copy). Gen1 iris decodes through
+    qcom-va-driver although its encode does not.
+  - **Controller input reaches the host: PASSED** (the Max's D-pad drives the FIT's Steam UI; Sunshine
+    makes a virtual Xbox Series pad).
+  - **Stats overlay (decode time, drops at 1080p60): OWED**, and a gen2 client.
+  - **Blocker found: Moonlight hung at stream start** inside the Vulkan loader's
+    `vkCreateXlibSurfaceKHR` (its startup decoder probe, HEVC Main10 via libplacebo), re-entering itself
+    forever at 100% CPU. Cause: `VK_LAYER_NOVADECK_game_priority` (packages/novadeck-gpu-priority, enabled
+    for every Steam launch by `NOVADECK_GAME_LOWPRIO=1`) exports `vkGetInstanceProcAddr` /
+    `vkGetDeviceProcAddr` and returns their addresses through `R_AARCH64_GLOB_DAT` relocations; in a
+    process that links libvulkan (Moonlight, through libplacebo) they resolve to the loader's trampolines,
+    so the loader's extension dispatch points at itself. Confirmed by A/B: `DISABLE_NOVADECK_GAME_LOWPRIO=1`
+    in the launch options and Moonlight streams. The layer does engage under Proton (a0f94df: mapped, the
+    game on ring 3, FIT) but cannot trip there: wine opens the loader `RTLD_NOW` without `RTLD_GLOBAL`
+    (`dlls/win32u/vulkan.c:3070`), so the layer's self-references bind to its own functions. It bites
+    a process with libvulkan in the global scope: linked (Moonlight) or dlopened `RTLD_GLOBAL`. x86
+    Linux games under system FEX never load it (a0f94df). **Fixed 2026-11-22** (user: on this branch):
+    the proc-addr entry points are `novadeck_game_priority_Get{Instance,Device}ProcAddr`, named in the
+    manifest's `functions` block, so the layer exports no `vk*` name. HW check owed: Moonlight from its
+    tile WITHOUT `DISABLE_NOVADECK_GAME_LOWPRIO=1`, and a Proton game still on ring 3 on gen2.
 
 ### 5. Capture under gamescope (host)
 - First try `capture = kms` and check rotated panels, MangoHud and overlay planes (the rotation-work
@@ -191,6 +224,16 @@ stream piped back to the host; nothing written on the card.
   `pipewire.cpp`). Upstreamable.
 - Stream the **whole session**, not a Sunshine "app": the friend sees whatever is running, as with
   Remote Play Together.
+- **KMS overlay planes (2026-11-22, user decision):** gamescope scans out several planes per CRTC (step 3's
+  black stream). Forcing composition and gamescope's PipeWire node both pay a full composite per frame;
+  the user rejected forcing it. Chosen, in two steps, both in Sunshine's kmsgrab and paid only while
+  streaming:
+  1. **Capture the CRTC's bottom plane** (lowest zpos), count monitors per CRTC, follow the bottom plane
+     each frame (reinit only on a size or rotation change): `packages/sunshine/patches/0001`. Costs the
+     host nothing; Steam overlays (QAM, notifications, MangoHud) are absent from the stream while
+     gamescope keeps them on their own plane. To offer upstream.
+  2. Later: blend the planes above into Sunshine's existing EGL RGB->NV12 pass (it already imports the
+     cursor plane), replaying the DPU's position, alpha blend and rotation.
 
 ### 6. Input and several players (host)
 - Sunshine's virtual pads (uinput/uhid) must show up in Steam Input as extra controllers. Check player
@@ -236,8 +279,8 @@ not a section of an existing panel. Two halves:
 ### 8. novadeck to novadeck
 - The real target: an SM8250 host with a gen2 client, and the reverse. Latency and drops from
   Moonlight's overlay, two players with pads.
-- Watch for the black-at-start stream (step 3). If it shows up, the client log tells decoder from
-  loss: decoder errors vs "Waiting for IDR frame" / FEC lines.
+- The black stream (step 3) is the overlay-plane capture, fixed by step 5's patch 0001: re-check it
+  here, idle and with D-pad input, on both hosts.
 
 ## Open questions
 - Does Steam offer the Remote Play Together invite on an Epic/GOG shortcut? Not checked; a yes covers

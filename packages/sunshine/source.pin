@@ -1,6 +1,13 @@
 # sunshine — local PKGBUILD (packages/sunshine/PKGBUILD). Not in holo or Arch. Builds its own
 # trimmed static FFmpeg from the build-deps submodule the release pins, and a static miniupnpc;
 # see the PKGBUILD header for why neither comes from the snapshot.
+#
+# Patches:
+#   0001  KMS capture takes each output's bottom plane and follows it, counting monitors per CRTC.
+#         gamescope scans out the app and its overlays on separate planes and composes them into
+#         one only when it has to; capture took the overlay plane, so the stream went black. To
+#         offer upstream.
 name: sunshine
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
+patches: 0001-kmsgrab-capture-each-output-s-bottom-plane.patch

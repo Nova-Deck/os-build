@@ -151,7 +151,7 @@ stream piped back to the host; nothing written on the card.
   - **Web UI by LAN IP is CSRF-blocked:** only localhost origins are allowed by default; the test added
     `csrf_allowed_origins = https://<ip>:47990`. Whatever owns Sunshine's config (step 7) must set it, or pair
     another way.
-  - **OPEN: stream sometimes black at start until the mouse moves** (user report). Host log of the one
+  - **DEFERRED (user, 2026-11-22): stream sometimes black at start until the mouse moves** (user report, PC client). Host log of the one
     session: Moonlight sent 10 IDR requests in 2.2 s after connect (~every 270 ms), Sunshine answered each
     with an IDR ~14 ms later at ~60 fps, then requests stopped at frame 139 and the stream stayed healthy.
     So the client discarded those IDRs. Mouse input began at +0.06 s, so the log cannot tie the recovery to
@@ -169,6 +169,7 @@ stream piped back to the host; nothing written on the card.
     `AV_PKT_FLAG_KEY` (`hw_base_encode.c:464,524`) -> qcom-va-driver `FORCE_KEY_FRAME` -> iris
     `SYNC_FRAME_REQUEST_WITH_PREFIX_SEQ_HDR`. So the encoder answers with good IDRs; what the client
     does with them is next (candidate 2, or loss on the way).
+    Not chased on the PC client: tracked only if it shows up with a novadeck client (step 8).
   - **No mDNS** (avahi-daemon disabled in the image, above). Proposed fix (publish through systemd-resolved) in step 7, not tested yet.
 - **Gate:** Sunshine's encoder probe picks `vaapi` H.264 (log), and a LAN Moonlight client on a PC
   streams the session.
@@ -235,6 +236,8 @@ not a section of an existing panel. Two halves:
 ### 8. novadeck to novadeck
 - The real target: an SM8250 host with a gen2 client, and the reverse. Latency and drops from
   Moonlight's overlay, two players with pads.
+- Watch for the black-at-start stream (step 3). If it shows up, the client log tells decoder from
+  loss: decoder errors vs "Waiting for IDR frame" / FEC lines.
 
 ## Open questions
 - Does Steam offer the Remote Play Together invite on an Epic/GOG shortcut? Not checked; a yes covers

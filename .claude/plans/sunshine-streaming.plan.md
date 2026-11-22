@@ -179,6 +179,9 @@ stream piped back to the host; nothing written on the card.
     plane-2. Proven by forcing composition (`GAMESCOPE_COMPOSITE_FORCE=1` on `:0`'s root, Sunshine
     `output_name = 0`): the stream held through idle, D-pad and the QAM. Forcing composition is NOT the fix
     (user: it costs the host its direct scanout); the fix is in the capture, step 5.
+    **Fix HW-passed 2026-11-22 (98015f1, FIT host, Max client, composition NOT forced, no `output_name`):**
+    kmsgrab lists DSI-1 once, a client connected, the stream stays up (user). No reinit and no
+    "follows the bottom plane" line in the log: capture took plane-1 from the start.
   - **No mDNS** (avahi-daemon disabled in the image, above). Proposed fix (publish through systemd-resolved) in step 7, not tested yet.
 - **Gate:** Sunshine's encoder probe picks `vaapi` H.264 (log), and a LAN Moonlight client on a PC
   streams the session.
@@ -199,7 +202,10 @@ stream piped back to the host; nothing written on the card.
     qcom-va-driver although its encode does not.
   - **Controller input reaches the host: PASSED** (the Max's D-pad drives the FIT's Steam UI; Sunshine
     makes a virtual Xbox Series pad).
-  - **Stats overlay (decode time, drops at 1080p60): OWED**, and a gen2 client.
+  - **Stats overlay at 1080p60: user-read 2026-11-22, "numbers looked good (60fps)"** (FIT host, PGRC
+    under Valve's FEX tool). Decode time, drops and latency were not written down: take them with the
+    gen2 client, still owed.
+  - Audio still absent: Sunshine runs as root and pulseaudio refuses it (`Access denied`), step 5.
   - **Blocker found: Moonlight hung at stream start** inside the Vulkan loader's
     `vkCreateXlibSurfaceKHR` (its startup decoder probe, HEVC Main10 via libplacebo), re-entering itself
     forever at 100% CPU. Cause: `VK_LAYER_NOVADECK_game_priority` (packages/novadeck-gpu-priority, enabled
@@ -213,8 +219,22 @@ stream piped back to the host; nothing written on the card.
     a process with libvulkan in the global scope: linked (Moonlight) or dlopened `RTLD_GLOBAL`. x86
     Linux games under system FEX never load it (a0f94df). **Fixed 2026-11-22** (user: on this branch):
     the proc-addr entry points are `novadeck_game_priority_Get{Instance,Device}ProcAddr`, named in the
-    manifest's `functions` block, so the layer exports no `vk*` name. HW check owed: Moonlight from its
-    tile WITHOUT `DISABLE_NOVADECK_GAME_LOWPRIO=1`, and a Proton game still on ring 3 on gen2.
+    manifest's `functions` block, so the layer exports no `vk*` name. **HW-passed 2026-11-22 (cb38cae,
+    Max):** Moonlight streams from its tile with `NOVADECK_GAME_LOWPRIO=1` in its environment (from
+    Steam's games env) and no disable override. The loader takes the manifest: `vulkaninfo` as deck with
+    `NOVADECK_GAME_LOWPRIO=1 VK_LOADER_DEBUG=layer` loads the `.so`, inserts the layer in the instance
+    AND device chains, unloads it at instance destroy (why a live Moonlight shows no mapping: its probe
+    instance is gone). **Proton on gen2 HW-passed 2026-11-22 (FIT):** Parking Garage Rally Circuit under
+    proton-cachyos-11.0-arm64, streamed to the Max: `garagerally.exe` maps the layer, has
+    `NOVADECK_GAME_LOWPRIO=1`, and submits only on ring 3 (866 in 3 s, `msm_gpu_submit`). Not a test of it: the same game as
+    an x86 Linux binary under Valve's FEX tool submits on ring 2; it uses the guest's x86 loader
+    (`/run/gfx/main/usr/lib/libvulkan.so.1`), which cannot load the arm64 layer, and has no
+    `NOVADECK_GAME_LOWPRIO` in its environment: the same as system FEX in a0f94df. Tracked off this
+    branch: #157 (an x86 build for the guest, after the gfx env is shown to reach FEX games).
+    Same log, unrelated and harmless: `Failed to find 'vkGetInstanceProcAddr' in layer
+    "liblsfg-vk-layer.so"` is lsfg-vk opting out: with no profile its
+    `vkNegotiateLoaderLayerInterfaceVersion` returns `VK_ERROR_INITIALIZATION_FAILED` on purpose
+    (`lsfg-vk-layer/src/layer.cpp`), which the loader reports as an error and skips.
 
 ### 5. Capture under gamescope (host)
 - First try `capture = kms` and check rotated panels, MangoHud and overlay planes (the rotation-work
@@ -231,7 +251,14 @@ stream piped back to the host; nothing written on the card.
   1. **Capture the CRTC's bottom plane** (lowest zpos), count monitors per CRTC, follow the bottom plane
      each frame (reinit only on a size or rotation change): `packages/sunshine/patches/0001`. Costs the
      host nothing; Steam overlays (QAM, notifications, MangoHud) are absent from the stream while
-     gamescope keeps them on their own plane. To offer upstream.
+     gamescope keeps them on their own plane. To offer upstream. **HW-passed on the FIT 2026-11-22**
+     (step 3), Steam UI and a game: Parking Garage Rally Circuit (x86 Linux, Valve's FEX tool) streams
+     to the Max, the QAM absent as predicted. The follow path ran: gamescope moved the picture between
+     planes 68 and 89 several times and the log shows `Capture follows the bottom plane` each way, no
+     reinit, no black. An SM8250 host still owed.
+  - Sunshine's GPU work (capture import + RGB->NV12) submits on ring 0, gamescope's ring, so it preempts
+    the game while streaming (`msm_gpu_submit` trace, FIT, 2026-11-22). Fine for latency; it costs the
+    game GPU time. Measure the hit before step 7 ships.
   2. Later: blend the planes above into Sunshine's existing EGL RGB->NV12 pass (it already imports the
      cursor plane), replaying the DPU's position, alpha blend and rotation.
 
@@ -279,8 +306,8 @@ not a section of an existing panel. Two halves:
 ### 8. novadeck to novadeck
 - The real target: an SM8250 host with a gen2 client, and the reverse. Latency and drops from
   Moonlight's overlay, two players with pads.
-- The black stream (step 3) is the overlay-plane capture, fixed by step 5's patch 0001: re-check it
-  here, idle and with D-pad input, on both hosts.
+- The black stream (step 3) is the overlay-plane capture, fixed by step 5's patch 0001: passed with the
+  FIT as host (2026-11-22); re-check it here with an SM8250 host, idle and with D-pad input.
 
 ## Open questions
 - Does Steam offer the Remote Play Together invite on an Epic/GOG shortcut? Not checked; a yes covers

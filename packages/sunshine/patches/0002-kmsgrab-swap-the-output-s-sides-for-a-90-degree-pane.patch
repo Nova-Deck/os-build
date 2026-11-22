@@ -1,0 +1,43 @@
+From 48d50cb822401417a3d1f17fefef17a0a41d63d2 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Sun, 22 Nov 2026 20:48:41 +0100
+Subject: [PATCH] kmsgrab: swap the output's sides for a 90-degree panel too
+
+A portrait panel used in landscape scans out an upright landscape
+framebuffer turned a quarter onto the panel. The plane's rotation then
+reads DRM_MODE_ROTATE_270 (Steam Deck) or DRM_MODE_ROTATE_90, depending
+on which way the panel is mounted; both swap the output's width and
+height. Only 270 was handled: on a 90 panel the stream kept the CRTC's
+portrait size, so the landscape picture was cropped to its left square
+and pillarboxed. Mask the value, so reflection bits do not hide the
+rotation.
+---
+ src/platform/linux/kmsgrab.cpp | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/src/platform/linux/kmsgrab.cpp b/src/platform/linux/kmsgrab.cpp
+index fd3beb6..dcf6321 100644
+--- a/src/platform/linux/kmsgrab.cpp
++++ b/src/platform/linux/kmsgrab.cpp
+@@ -1266,13 +1266,15 @@ namespace platf {
+               logical_width = viewport.logical_width;
+               logical_height = viewport.logical_height;
+ 
+-              switch (card.get_panel_orientation(plane->plane_id)) {
++              // The plane's framebuffer holds the picture upright; scanout turns it onto a panel
++              // mounted the other way. A quarter turn either way swaps the output's sides.
++              switch (card.get_panel_orientation(plane->plane_id) & DRM_MODE_ROTATE_MASK) {
++                case DRM_MODE_ROTATE_90:
+                 case DRM_MODE_ROTATE_270:
+-                  BOOST_LOG(debug) << "Detected panel orientation at 90, swapping width and height.";
++                  BOOST_LOG(debug) << "Detected a quarter-turned panel, swapping width and height.";
+                   width = viewport.height;
+                   height = viewport.width;
+                   break;
+-                case DRM_MODE_ROTATE_90:
+                 case DRM_MODE_ROTATE_180:
+                   BOOST_LOG(warning) << "Panel orientation is unsupported, screen capture may not work correctly.";
+                   break;
+-- 
+2.56.1
+

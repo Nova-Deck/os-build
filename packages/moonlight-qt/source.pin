@@ -1,0 +1,5 @@
+# moonlight-qt — local PKGBUILD (packages/moonlight-qt/PKGBUILD), built from the v6.2.0 release
+# source tarball. Not in holo or Arch. See the PKGBUILD header for what differs from the AUR recipe.
+name: moonlight-qt
+pkgbuild_local: PKGBUILD
+pkgrel_suffix: 1

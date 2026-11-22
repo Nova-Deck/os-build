@@ -1,0 +1,58 @@
+# moonlight-qt — the Moonlight game-stream client (GPL-3.0).
+#
+# WHY IT IS HERE: a novadeck joins a friend's Sunshine host (another novadeck, or a PC) to play
+# their Epic/GOG games, the Remote Play Together that Steam cannot offer for non-Steam games.
+# Plan: .claude/plans/sunshine-streaming.plan.md, step 4. Hardware decode goes through FFmpeg's
+# VA-API hwaccel to qcom-va-driver (packages/qcom-va-driver), which exports DMABUFs for Moonlight's
+# EGL renderer. That driver is only loaded with LIBVA_DRIVER_NAME=qcom, which whoever launches
+# Moonlight sets (the Steam tile, the plugin): this package does not select it system-wide.
+#
+# WHY LOCAL: in neither holo nor Arch (AUR only). Written from the AUR PKGBUILD, changed as follows:
+#
+#   built against the snapshot's FFmpeg and sdl2-compat, as the AUR does. qmake auto-detects the
+#   renderers: VA-API (X11, Wayland, DRM), EGL, DRM, libplacebo Vulkan, and VDPAU (inert here: no
+#   VDPAU driver). No CUDA (no ffnvcodec in the snapshot), no MMAL, no Steam Link.
+#   depends is the linked set (readelf NEEDED); vulkan-headers is for libplacebo's vulkan.h.
+#   INSTALL_ROOT instead of PREFIX="$pkgdir/usr", so nothing records the build directory.
+#   no include fixups in prepare(): the AUR's two seds are for 6.1.0.
+#
+# Source: the release's MoonlightSrc tarball, which carries the submodules (moonlight-common-c,
+# qmdnsengine, h264bitstream, SDL_GameControllerDB) at the commits the tag records.
+
+pkgname=moonlight-qt
+pkgver=6.2.0
+pkgrel=1
+pkgdesc='GameStream client for Sunshine hosts'
+arch=('aarch64')
+url='https://github.com/moonlight-stream/moonlight-qt'
+license=('GPL-3.0-or-later')
+depends=(
+  'ffmpeg'
+  'gcc-libs'
+  'glibc'
+  'libdrm'
+  'libglvnd'
+  'libplacebo'
+  'libva'
+  'libx11'
+  'openssl'
+  'opus'
+  'qt6-base'
+  'qt6-declarative'
+  'qt6-svg'
+  'sdl2-compat'
+  'sdl2_ttf'
+  'wayland'
+)
+makedepends=('vulkan-headers')
+source=("${url}/releases/download/v${pkgver}/MoonlightSrc-${pkgver}.tar.gz")
+sha256sums=('217afac54e4f8734f3d97b32cb8c8b46b677e87f25b77c945343dd06f359e189')
+
+build() {
+  qmake6 PREFIX=/usr CONFIG+=release moonlight-qt.pro
+  make release
+}
+
+package() {
+  make INSTALL_ROOT="${pkgdir}" install
+}

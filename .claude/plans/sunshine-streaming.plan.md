@@ -206,7 +206,10 @@ stream piped back to the host; nothing written on the card.
     `showFullScreen()`, and gamescope letterboxes it. Fix: `HAS_DESKTOP_ENVIRONMENT=0` in the launch env
     (`wm.cpp:191`), in the `.desktop` now and the per-host tiles in step 7. It also makes the stream
     always capture system keys and drops the desktop-only key combos and window-mode settings: none apply
-    under gamescope. Not tried yet.
+    under gamescope. **HW-passed 2026-11-22 (FIT):** with `HAS_DESKTOP_ENVIRONMENT=0` in Moonlight's
+    environment the UI opens fullscreen. Shipped in the package (user: no desktop session on
+    novadeck to get in the way): its `.desktop` runs `env LIBVA_DRIVER_NAME=qcom HAS_DESKTOP_ENVIRONMENT=0
+    moonlight`, so a tile made from it with "Add a non-Steam game" carries both; step 7's tiles reuse it.
   - **Controller input reaches the host: PASSED** (the Max's D-pad drives the FIT's Steam UI; Sunshine
     makes a virtual Xbox Series pad).
   - **Stats overlay at 1080p60: user-read 2026-11-22, "numbers looked good (60fps)"** (FIT host, PGRC

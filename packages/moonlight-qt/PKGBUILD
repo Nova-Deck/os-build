@@ -4,8 +4,16 @@
 # their Epic/GOG games, the Remote Play Together that Steam cannot offer for non-Steam games.
 # Plan: .claude/plans/sunshine-streaming.plan.md, step 4. Hardware decode goes through FFmpeg's
 # VA-API hwaccel to qcom-va-driver (packages/qcom-va-driver), which exports DMABUFs for Moonlight's
-# EGL renderer. That driver is only loaded with LIBVA_DRIVER_NAME=qcom, which whoever launches
-# Moonlight sets (the Steam tile, the plugin): this package does not select it system-wide.
+# EGL renderer. That driver is only loaded with LIBVA_DRIVER_NAME=qcom, which the launcher sets,
+# not the system: the .desktop below, so a tile made from it with "Add a non-Steam game" carries it.
+#
+# THE .desktop LAUNCHES IN GAMING MODE. Its Exec gains two variables:
+#   LIBVA_DRIVER_NAME=qcom     the VA-API decoder above.
+#   HAS_DESKTOP_ENVIRONMENT=0  Moonlight counts any X11/Wayland display as a desktop
+#                              (app/wm.cpp isRunningDesktopEnvironment), so under gamescope its UI
+#                              opened as a 1280x600 window, letterboxed. Without a desktop it calls
+#                              showFullScreen() (app/gui/main.qml) and always captures system keys.
+#                              novadeck has no desktop session for this to get in the way of.
 #
 # WHY LOCAL: in neither holo nor Arch (AUR only). Written from the AUR PKGBUILD, changed as follows:
 #
@@ -55,4 +63,7 @@ build() {
 
 package() {
   make INSTALL_ROOT="${pkgdir}" install
+  local desktop="${pkgdir}/usr/share/applications/com.moonlight_stream.Moonlight.desktop"
+  grep -qx 'Exec=moonlight' "${desktop}" || { echo "upstream .desktop Exec changed: re-check the edit" >&2; return 1; }
+  sed -i 's|^Exec=moonlight$|Exec=env LIBVA_DRIVER_NAME=qcom HAS_DESKTOP_ENVIRONMENT=0 moonlight|' "${desktop}"
 }

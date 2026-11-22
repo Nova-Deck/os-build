@@ -719,9 +719,11 @@ $(OVERLAY_STAMP): $(OVERLAY_DB)
 # place. customize-base.sh records `dev:1` in its own reuse key for a dev bootstrap, so the built
 # tree states its own mode: assert that against the mode we asked for. This guards BOTH directions,
 # which nothing downstream does -- guard-rootfs.sh only ever runs on a release build.
+# The UID/GID pin is listed because customize-base.sh keys its reuse on it: without it here a
+# pin-only edit never reaches the script, and the base keeps the old allocation.
 $(BASE_STAMP): build/builder.pin build/snapshot.pin build/lib-pins.sh $(ROOTFS_DIR)/manifest.lock $(ROOTFS_DIR)/fetchlock.sh \
                $(ROOTFS_DIR)/conf/pacman.conf $(ROOTFS_DIR)/conf/os-release $(ROOTFS_DIR)/customize-base.sh $(PREBUILT_PINS) \
-               $(BASE_MODE_STAMP)
+               $(ROOTFS_DIR)/overlay/usr/lib/sysusers.d/01-novadeck-enforce-ids.conf $(BASE_MODE_STAMP)
 	$(ROOTFS_DIR)/customize-base.sh
 	@test -f work/base/usr/bin/sshd   # sentinel: sshd present => release runtime laid down
 	@: "sentinel: the pairing agent's interpreter and key validator. Both arrive as transitive"; \

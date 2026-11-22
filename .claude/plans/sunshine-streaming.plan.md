@@ -200,11 +200,24 @@ stream piped back to the host; nothing written on the card.
   - **VA-API decode on SM8250: PASSED.** `Renderer 'EGL/GLES' with 'VAAPI' backend chosen`, HEVC Main,
     `Direct mapping possible` (nv12 surfaces imported by EGL, no copy). Gen1 iris decodes through
     qcom-va-driver although its encode does not.
+  - **Moonlight's UI opens as a 1280x600 window under gamescope** (both devices; the stream itself is
+    fullscreen, `windowmode=0`). Moonlight counts any X11/Wayland display as a desktop
+    (`app/wm.cpp:188-204`), so `main.qml` shows the UI at its 1280x600 default instead of
+    `showFullScreen()`, and gamescope letterboxes it. Fix: `HAS_DESKTOP_ENVIRONMENT=0` in the launch env
+    (`wm.cpp:191`), in the `.desktop` now and the per-host tiles in step 7. It also makes the stream
+    always capture system keys and drops the desktop-only key combos and window-mode settings: none apply
+    under gamescope. Not tried yet.
   - **Controller input reaches the host: PASSED** (the Max's D-pad drives the FIT's Steam UI; Sunshine
     makes a virtual Xbox Series pad).
   - **Stats overlay at 1080p60: user-read 2026-11-22, "numbers looked good (60fps)"** (FIT host, PGRC
-    under Valve's FEX tool). Decode time, drops and latency were not written down: take them with the
-    gen2 client, still owed.
+    under Valve's FEX tool). Decode time, drops and latency were not written down.
+  - **Gen2 client (FIT) from an SM8250 host (Max), 2026-11-22, Steam UI, overlay read from a gamescope
+    screenshot:** HEVC 1920x1080, 60.22 fps in / decoded / rendered; host processing 4.1/6.2/5.1 ms
+    (min/max/avg); 0.00% dropped by network and by jitter; network 5 ms (variance 1); decode 0.50 ms;
+    queue 0.05 ms; render 1.96 ms incl. V-sync. The picture was cropped (step 5, patch 0002).
+    **With 0002 (full picture):** 60.14 fps in / decoded / rendered; host processing 5.0/11.6/7.3 ms;
+    0.00% / 0.00% dropped; network 4 ms (variance 1); decode 0.95 ms; queue 0.04 ms; render 2.28 ms.
+    Host time and decode rose with real content in the whole frame (the cropped run was mostly black).
   - Audio still absent: Sunshine runs as root and pulseaudio refuses it (`Access denied`), step 5.
   - **Blocker found: Moonlight hung at stream start** inside the Vulkan loader's
     `vkCreateXlibSurfaceKHR` (its startup decoder probe, HEVC Main10 via libplacebo), re-entering itself
@@ -256,6 +269,17 @@ stream piped back to the host; nothing written on the card.
      to the Max, the QAM absent as predicted. The follow path ran: gamescope moved the picture between
      planes 68 and 89 several times and the log shows `Capture follows the bottom plane` each way, no
      reinit, no black. An SM8250 host still owed.
+  - **Rotated panels: patch 0002 (2026-11-22).** Max as host: gen1 encode passes Sunshine's probe
+    (`h264_vaapi` + `hevc_vaapi`), the stream runs, but cropped to the left 1080x1080 square of the UI
+    and pillarboxed. One plane (89) with `rotation` = `DRM_MODE_ROTATE_90`: gamescope's 1920x1080
+    framebuffer is upright and the DPU turns it onto the portrait panel. kmsgrab took the image from
+    the framebuffer (1920x1080) but the stream size from the CRTC (1080x1920); it already swapped the
+    sides for `ROTATE_270` (Steam Deck) and only warned on 90 (`Panel orientation is unsupported`,
+    in the Max's log at every init). 0002 treats 90 like 270, masked with `DRM_MODE_ROTATE_MASK`.
+    **HW-passed 2026-11-22** (`pacman -U` on the Max's dev card): the log says `Detected a
+    quarter-turned panel`, and the FIT shows the Max's whole UI upright, edge to edge, no pillarbox.
+    Not done: the cursor plane's position on a rotated panel (in CRTC coordinates; the
+    270 path has the same gap), and 180.
   - Sunshine's GPU work (capture import + RGB->NV12) submits on ring 0, gamescope's ring, so it preempts
     the game while streaming (`msm_gpu_submit` trace, FIT, 2026-11-22). Fine for latency; it costs the
     game GPU time. Measure the hit before step 7 ships.
@@ -313,5 +337,5 @@ not a section of an existing panel. Two halves:
 - Does Steam offer the Remote Play Together invite on an Epic/GOG shortcut? Not checked; a yes covers
   Steam friends without any of this.
 - Gen1 encode session count when Steam recording and Sunshine both want the encoder.
-- Panel rotation under KMS capture (AYANEO, Odin).
+- Panel rotation under KMS capture: answered for a quarter turn (step 5, 0002). 180 untested.
 - Whether Moonlight-qt's EGL renderer under gamescope's Xwayland gets a zero-copy import on freedreno.

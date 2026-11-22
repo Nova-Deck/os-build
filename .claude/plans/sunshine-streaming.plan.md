@@ -161,6 +161,14 @@ stream piped back to the host; nothing written on the card.
     Next: the PC's Moonlight log at a reproduction (`%TEMP%\Moonlight-*.log` on Windows), H.264 vs HEVC in
     Moonlight's settings, and on a dev card `ffmpeg -c:v hevc_vaapi -force_key_frames` with the headers of
     every keyframe dumped (trace_headers bsf).
+    **Candidate (1) REFUTED 2026-11-22, Pocket FIT** (dev card at 55e2f99): Sunshine's VA-API settings
+    (`LIBVA_DRIVER_NAME=qcom`, `idr_interval` max, huge GOP, `async_depth 1`), `testsrc2` 1080p60 CBR 15M,
+    a forced keyframe every 0.5 s: all 10 HEVC keyframes are `VPS SPS PPS IDR_W_RADL`, all 10 H.264 ones
+    `SPS PPS IDR`. The HEVC stream cut at its 2nd IDR decodes clean on the PC's ffmpeg (270/270 frames,
+    no errors). The chain is right end to end: Sunshine's `pict_type = I` -> FFmpeg `force_idr` -> IDR +
+    `AV_PKT_FLAG_KEY` (`hw_base_encode.c:464,524`) -> qcom-va-driver `FORCE_KEY_FRAME` -> iris
+    `SYNC_FRAME_REQUEST_WITH_PREFIX_SEQ_HDR`. So the encoder answers with good IDRs; what the client
+    does with them is next (candidate 2, or loss on the way).
   - **No mDNS** (avahi-daemon disabled in the image, above). Proposed fix (publish through systemd-resolved) in step 7, not tested yet.
 - **Gate:** Sunshine's encoder probe picks `vaapi` H.264 (log), and a LAN Moonlight client on a PC
   streams the session.

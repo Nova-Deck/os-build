@@ -1,9 +1,17 @@
-# Use mq-deadline with a deep 4MB read-ahead on the SD/eMMC boot device. A
-# handheld runs one game and the Steam UI, so BFQ's fairness between many
-# processes buys little, while under it a small journal commit can take over a
-# second on an SD card. Steam writes game recordings from its capture threads,
-# so a commit that slow stalls the recording and leaves a clip Steam can't play.
+# Use mq-deadline on the SD/eMMC boot device. A handheld runs one game and the
+# Steam UI, so BFQ's fairness between many processes buys little, while under it
+# a small journal commit can take over a second on an SD card. Steam writes game
+# recordings from its capture threads, so a commit that slow stalls the recording
+# and leaves a clip Steam can't play.
+# Read-ahead is 256 KB on an SD card (its mmc card's sysfs type is "SD"): a page
+# fault in a mapped file reads up to read_ahead_kb around it, so at 4 MB, 300
+# random faults in a 655 MB game file read 500 MB from a cold cache and took
+# 5.9 s; at 256 KB, 26 MB and 0.37 s. Sequential reads gain nothing past 256 KB,
+# where a UHS-I card already reaches its ~80 MB/s. An eMMC (type "MMC") keeps
+# 4 MB: it was not measured.
 # NOTE: scoped to mmcblk (the SD card novadeck boots from today). A future
 # install-to-UFS target enumerates as scsi/sd*, not mmcblk, so it won't match
 # this rule — revisit when the UFS install path lands.
-ACTION=="add|change", KERNEL=="mmcblk[0-9]", ATTR{queue/scheduler}="mq-deadline", ATTR{queue/read_ahead_kb}="4096"
+ACTION=="add|change", KERNEL=="mmcblk[0-9]", ATTR{queue/scheduler}="mq-deadline"
+ACTION=="add|change", KERNEL=="mmcblk[0-9]", ATTRS{type}=="SD", ATTR{queue/read_ahead_kb}="256"
+ACTION=="add|change", KERNEL=="mmcblk[0-9]", ATTRS{type}=="MMC", ATTR{queue/read_ahead_kb}="4096"

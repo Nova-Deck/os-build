@@ -325,7 +325,7 @@ stream piped back to the host; nothing written on the card.
 - **The host setting, HW-passed 2026-11-23 (user):** Moonlight's "mute host" off gives sound on both sides
   (Sunshine captures the speaker's monitor and leaves the default sink alone). With it on, the FIT is
   silent and Sunshine puts the speaker back as the default sink on disconnect.
-- **Shipped as `novadeck-sunshine.service` (2026-11-23, not yet on hardware).** deck + ambient capability;
+- **Shipped as `novadeck-sunshine.service` (2026-11-23), HW-passed on the FIT (below).** deck + ambient capability;
   no `[Install]`, so it is off at every boot and only the step 7 plugin starts and stops it (user decision).
   Web UI and API answer localhost only (`origin_web_ui_allowed = pc`, user decision): until a password is set,
   anyone who reaches the web UI sets it. `/usr/lib/novadeck/sunshine-creds` sets a new one at every start and
@@ -336,26 +336,54 @@ stream piped back to the host; nothing written on the card.
   web UI on all interfaces and refuses non-local clients itself (403), so static assets and the locale answer
   on the LAN, and denied requests grow the log on `/run` while hosting is on. Owed with the next package
   change: the stale capability comment in `packages/sunshine/PKGBUILD`, and the tile comment in moonlight-qt's.
+- **The unit's hardware test, 2026-11-23 (card ed20049, FIT host, Max client).** Off after the first boot on both
+  devices, and off after a reboot taken with Sunshine running. No file capability on the binary. While streaming,
+  `CAP_SYS_ADMIN` is permitted in `drm_worker` alone; `NoNewPrivs` set. Web UI from the LAN: 403 on the six URLs
+  tried without the password and the two tried with it; on the device: 401 without, 200 with. A restart changes
+  the password (old one 401) and keeps the pairing; after the reboot the Max connected with no PIN. Stop removes
+  the process, ports, virtual devices, sinks and `/run/novadeck-sunshine`. Not run: this unit on the SM8250.
+  `setpriority` to -10/-15 is refused (no CAP_SYS_NICE); `LimitNICE=-15` might allow it. Sound and picture were
+  clean with the game (user), so not added.
 
 ### 6. Input and several players (host)
 - **The guest must be player 2 (user, 2026-11-23: missing from this plan).** Sunshine allocates one virtual pad
   per client controller from one host-wide mask (`src/input.cpp:1283-1305`, 63d35f7), an Xbox Series pad by
-  default, so each guest is a separate device. InputPlumber should leave them alone: our Pocket Max config
-  matches its own pad by name. Nothing below is tested yet.
-  - **Order.** Steam presumably numbers pads by connection. Proposed: the step 7 plugin orders them, host first,
-    then guests as they joined, with `SteamClient.Input.RegisterForControllerListChanges` (`nXInputIndex` per
-    pad) and `SwapControllerOrder` (names from `@decky/ui`'s types; behaviour unverified).
-  - **The guest's pad drives the host's Steam UI** (seen 2026-11-22: the Max's D-pad moved the FIT's UI), so
-    Guide probably opens its menu. This Sunshine has no per-client permission that I found.
-  - **Keyboard and mouse are on for every client by default**; `keyboard`/`mouse = disabled` would stop a guest
-    typing on the host, and rule out mouse games. User decision, open.
-  - **One guest as two pads** if Moonlight sees both the raw pad and Steam's virtual one. Then
-    `--no-multi-controller` on the tile.
-  - **Joining after the game started:** some games look for pads only at launch.
-  - **Steam Input off on an Epic/GOG tile:** the game sees raw pads in kernel order; Steam's order does nothing.
-  - Test on card ed20049: pads added and their order with no game; a local two-player game; Guide and D-pad in
-    game; leave and rejoin mid-game.
-- Sunshine `channels` > 1: one iris encode session per client. Measure 2 clients on SM8250.
+  default, so each guest is a separate device.
+- **Works with one guest, HW-passed 2026-11-23 (card ed20049, FIT host, Max client; Parking Garage Rally Circuit,
+  Steam game under Proton, two-player mode).** What each line rests on is in brackets.
+  - **Order:** the FIT has Steam controller 0 and XInput slot 0, the Max 1 and 1, with no game and in game; the
+    Max got slot 1 again after each of three reconnects and after the reboot (Steam's `controller.txt`,
+    `virtualgamepadinfo.txt`). One guest needs no reordering.
+  - **One guest is one pad in the game.** The game process opened only the two pads Steam Input makes; not
+    Sunshine's raw pad, and no `js` node (one of Sunshine's mice shows up as `js3`). InputPlumber logged nothing
+    about the guest's pad.
+  - Mapping and rumble on the Max: right (user). Steam read the pad through evdev on the first connection and
+    HIDAPI on later ones; I do not know why, both mapped.
+  - **Guide on the Max opens the Max's own Steam menu**; nothing reaches the FIT, input in that menu included
+    (user). A Moonlight on a phone or PC may send Guide: untested.
+  - **Whatever Steam UI is open on the host, the guest can drive it** (user): with no game, and in the menu the
+    FIT's Guide opens. So quitting the game, Settings and the power menu are in a guest's reach. Not looked
+    into: making Steam ignore one controller in its UI.
+  - **Keyboard and mouse off (user decision, 2026-11-23), now the shipped default.** `mouse = disabled` also drops
+    touch and pen (`src/input.cpp:1374`). Taps on the Max did not reach the FIT (user); no run with the mouse on
+    to compare. Sunshine still creates its keyboard and mice at start, and a touchscreen and a pen per session.
+- **Leaving: two paths, both seen mid-game, the Max player 2 again after each (user + logs).**
+  - **Moonlight closed from Steam's menu** (the normal way out on novadeck): the pad stays plugged in, neutral;
+    coming back sends `resume` and reuses it, the game sees nothing. Sunshine keeps it per paired client while
+    an app runs, and our "Desktop" runs no command, so it never ends by itself. **A guest who leaves for good
+    leaves an idle player 2 behind.**
+  - **Quit in Moonlight** (`cancel`, then `launch`): the pad goes away (Steam says "Xbox disconnected"), and comes
+    back in the same slot. PGRC picked it up, and kept one handle to the removed pad.
+  - **`cancel` ends every guest's session and pads** (`nvhttp.cpp` `cancel` -> `rtsp_stream::terminate_sessions`).
+    Source only; check it with two guests.
+  - A `cancel` was also sent once at 15:51 after a relaunch; the log does not say whether a button press or
+    Moonlight itself sent it.
+- Still to test: two guests and their order on rejoin (then `SteamClient.Input.RegisterForControllerListChanges`
+  and `SwapControllerOrder`, names from `@decky/ui`'s types, behaviour unverified); an Epic/GOG tile with Steam
+  Input off, where the game sees raw pads; a game that looks for pads only at launch.
+- Two clients: this Sunshine has no `channels` option and I found no limit on sessions (63d35f7); the second client
+  sends `resume`, and only the first one's "mute host" choice counts. One iris encode session per client:
+  measure 2 clients on SM8250.
 
 ### 7. Its own Decky plugin (user decision, 2026-11-20)
 A new plugin, `apps/decky/novadeck-<name>` (name TBD; the repo convention, beside `novadeck-stores`),
@@ -367,6 +395,11 @@ not a section of an existing panel. Two halves:
 - **Host:** start / stop Sunshine, **off by default**. Shows the state and connected players. Has a
   PIN field for pairing a new client: the backend posts it to Sunshine's local API, so the web UI is
   never needed on the device.
+- **Host, per guest:** "Disconnect" = `POST /api/clients/update` with `enabled: false`, which ends that client's
+  session and removes only its pad (`confighttp.cpp:1291`, source only); `true` lets it back in without a PIN.
+  Needed, not optional: closing Moonlight leaves the guest's pad plugged in (step 6). It is also how to keep one
+  guest out when another is playing, since `keyboard`, `mouse` and `controller` are global settings.
+  The screen says, in plain words, that guests control the device like a second controller, menus included.
 - **Join:** lists hosts found on the LAN (Sunshine publishes `_nvstream._tcp` over mDNS,
   `src/platform/linux/publish.cpp`), pairs, and starts the stream. It drives the Moonlight-qt CLI,
   which has exactly these verbs: `moonlight pair <host> --pin NNNN` (the plugin picks the PIN and shows

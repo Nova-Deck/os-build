@@ -425,9 +425,11 @@ not a section of an existing panel. Two halves:
   Sunshine UUID, not its name or IP, which change), never Steam's appid
   (`novadeck-stores/py_modules/novadeck_stores/shortcuts.py`, `src/lib/shortcutBridge.ts`).
   Step 4's generic Moonlight tile then becomes optional.
-- **Duplicate tiles on the user's other devices (user, 2026-11-23; decide with this step).** Steam offers each
-  device's shortcuts to the others for Remote Play, so the Max and the FIT each list two Moonlight and two Google
-  Play Store cards. Read from both Steam UIs: one entry per app ID, with the devices in `per_client_data`
+- **Duplicate tiles on the user's other devices (user, 2026-11-23; low priority, decide with this step).** Both test
+  devices are signed in to the same Steam account, and Steam offers each one's shortcuts to the other for Remote
+  Play, so the Max and the FIT each list two Moonlight and two Google Play Store cards. A host and a guest normally
+  have their own accounts (user), and should not see this; not tested with two accounts. Someone who owns two
+  novadecks still would. Read from both Steam UIs: one entry per app ID, with the devices in `per_client_data`
   (`clientid` "0" = local); Steam gave the same tile a different ID on each device, so they do not merge. No
   per-shortcut setting found. "Hide this game" is no answer: the hidden list is identical on both devices, so it
   looks account-synced. Proposed, untested: the plugin hides a remote-only (`!local_per_client_data`) shortcut

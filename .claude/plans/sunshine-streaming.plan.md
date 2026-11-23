@@ -479,7 +479,7 @@ not a section of an existing panel. Two halves:
       So the pinned API works in Decky's bundled Python (only that client sends the PIN and the name).
     - Tile (`stream-host` + the host's id) and the Sunshine tab on the Max; the tile streams.
     - **Patch 0003: sound on both, Moonlight's default settings.** Captured from the speaker's own monitor, default
-      sink never moved, no null sink.
+      sink never moved. During a session Sunshine still loads its three `sink-sunshine-*`; they stay suspended.
     - 7 min 22 s, 59.9 fps, 0.16% lost on the network (one burst of 32 frames), host 5.8 ms average, decode 1.0 ms.
     - **Disconnect from the panel ends the stream** (Moonlight: `Connection terminated: -1`), the pad is gone, and the
       guest is enabled again. Sunshine logs no line for it.
@@ -497,9 +497,13 @@ not a section of an existing panel. Two halves:
       Joining again after a Forget needs no PIN: neither side unpaired.
     - Forgotten host stayed listed until the panel was reopened (the list went to the panel the dialog had replaced):
       fixed in 0fdd261, HW-passed as a hot patch, the join half too. Hosting stayed off through that reboot.
-    - The panel searches when it opens (user), 9de144a, not on hardware.
-    - Owed: one registration after SIGKILL, a PC listing the FIT, the setpriv prefix, tabs of both stores and Sunshine
-      side by side, two guests, a game's fps while the panel searches.
+    - The panel searches when it opens (user), 9de144a: HW-passed as a hot patch, on both. A search on the Max while it
+      streamed (22 s in) logged no network drop.
+    - The order that crashed the Max (Stores, a render, Streaming, a render) ran on the Max and the FIT without error.
+    - SIGKILL while hosting, nobody streaming: running again 2.5 s later, one advert, guests kept, new password; a stop
+      then withdraws it.
+    - Owed: a PC listing the FIT, the setpriv prefix, tabs of both stores and Sunshine side by side, two guests, the
+      game's fps while hosting.
 
 - **Duplicate tiles on the user's other devices (user, 2026-11-23; low priority, decide with this step).** Both test
   devices are signed in to the same Steam account, and Steam offers each one's shortcuts to the other for Remote

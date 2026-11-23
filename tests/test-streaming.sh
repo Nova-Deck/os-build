@@ -237,6 +237,28 @@ while IFS= read -r line; do
 done <<<"$out"
 [[ $(grep -c '^ok ' <<<"$out") -ge 77 ]] || bad "fewer backend checks ran than expected"
 
+echo "the panel"
+SRC="$PLUGIN/src"
+# Source checks only: Steam's UI is not here to run it.
+grep -qE '\bremove\b' "$SRC/Content.tsx" \
+    && bad "Content.tsx removes a guest: the QAM opens over a running game, so that sits behind a dialog" \
+    || ok "nothing destructive is a row in the QAM"
+grep -A12 'const confirmRemove' "$SRC/GuestDialog.tsx" | grep -q 'ConfirmModal' \
+    && ok "removing a guest asks first" || bad "removing a guest does not ask first"
+grep -A8 'const onToggle' "$SRC/Content.tsx" | grep -q 'streaming === 0' && grep -q 'Stop hosting?' "$SRC/Content.tsx" \
+    && ok "turning hosting off while someone streams asks first" || bad "hosting can be turned off under a guest without a question"
+# Steam parses only these; @decky/ui types it as any string, so tsc cannot catch "horizontal".
+check_flow=$(grep -ohE 'flow-children="[^"]*"' "$SRC"/*.tsx | sort -u | grep -vE '"(row|column)"')
+[[ -z $check_flow ]] && ok "every flow-children is one Steam parses" || bad "Steam ignores $check_flow"
+awk '/pending\.address/ && !a {a=NR} /pending\.name/ && !n {n=NR} END {exit !(a && n && a < n)}' "$SRC/PinDialog.tsx" \
+    && ok "the PIN dialog names the address before the name the guest chose" || bad "the PIN dialog leads with a name the guest chose"
+grep -q 'setInterval' "$SRC"/*.tsx && bad "polls can overlap (setInterval)" || ok "the next poll waits for the last one"
+grep -q 'menus included' "$SRC/Content.tsx" && grep -q 'menus included' "$SRC/PinDialog.tsx" \
+    && ok "both screens say guests reach the menus" || bad "a screen no longer says guests reach the menus"
+for call in $(grep -ohE 'call<[^>]*>+\("[a-z_]+"' "$SRC/backend.ts" | sed -E 's/.*"([a-z_]+)"/\1/'); do
+    grep -q "async def $call(" "$PLUGIN/main.py" && ok "the backend has $call" || bad "backend.ts calls $call, which main.py lacks"
+done
+
 echo "the image ships it"
 for f in Makefile rootfs/lib-assemble-decky-splash.sh rootfs/guard-rootfs.sh; do
     grep -qE '^(DECKY_PLUGINS|for (plugin_name|decky_plugin) ).*novadeck-streaming' "$ROOT/$f" \

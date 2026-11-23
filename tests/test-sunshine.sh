@@ -85,9 +85,24 @@ check "the app list offers the whole session and runs no command" \
     "[['image-path', 'name']] ['Desktop']"
 
 echo "4. the unit, the config and the helper agree"
-check "the unit starts Sunshine on our config" "$(unitkey ExecStart)" "/usr/bin/sunshine /etc/novadeck/sunshine.conf"
+check "the unit starts Sunshine through the name helper" "$(unitkey ExecStart)" "/usr/lib/novadeck/sunshine-start"
 check "credentials are made before the port opens" "$(unitkey ExecStartPre)" /usr/lib/novadeck/sunshine-creds
 [[ -x $CREDS ]] && ok "the helper is executable" || bad "the helper is not executable"
+
+echo "4b. the host's name"
+START="$OVL/usr/lib/novadeck/sunshine-start"
+[[ -x $START ]] && ok "the helper is executable" || bad "the helper is missing or not executable"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@"\n' >"$TMP/echo-args"; chmod +x "$TMP/echo-args"
+named() {  # named <model bytes> [conf line]: what Sunshine is started with
+    printf "$1" >"$TMP/model"; printf '%s\n' "${2:-}" >"$TMP/conf"
+    env SUNSHINE="$TMP/echo-args" MODEL="$TMP/model" CONF="$TMP/conf" bash "$START" 2>&1 | tr '\n' '|'
+}
+check "Sunshine is named after the device" "$(named 'KONKR Pocket FIT\0')" "$TMP/conf|sunshine_name=KONKR Pocket FIT|"
+check "a name set in the config wins" "$(named 'KONKR Pocket FIT\0' 'sunshine_name = Couch')" "$TMP/conf|"
+check "a commented-out name is no name" "$(named 'X\0' '# sunshine_name = Couch')" "$TMP/conf|sunshine_name=X|"
+check "no model, no name: Sunshine keeps its own" "$(named '\0')" "$TMP/conf|"
+check "a model cannot bring another option or a comment" "$(named 'A\nencoder = x # y\0')" "$TMP/conf|sunshine_name=A encoder x y|"
+check "it replaces itself with Sunshine, which must be the main process" "$(grep -cE '^ *exec ' "$START")" 2
 
 echo "5. the credentials helper"
 mkdir -p "$TMP/bin"

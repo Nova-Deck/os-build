@@ -44,7 +44,8 @@ RuntimeDirectoryPreserve=restart
 
 # Fails the start when it cannot set a password, so the port never opens without one.
 ExecStartPre=/usr/lib/novadeck/sunshine-creds
-ExecStart=/usr/bin/sunshine /etc/novadeck/sunshine.conf
+# Sunshine on /etc/novadeck/sunshine.conf, under the device's name.
+ExecStart=/usr/lib/novadeck/sunshine-start
 
 # The mDNS advert, up once the port is and gone with the service. '+' because registering a service
 # with resolved wants root, which only these two commands get; '-' because it must never decide

@@ -51,8 +51,8 @@ class Plugin:
                 return await self._state()
             return await self._state("Hosting did not start" if on else "Hosting did not stop")
 
-    async def pair(self, pairing_id, pin):
-        return await self._change(lambda c: c.pair(pairing_id, pin),
+    async def pair(self, pairing_id, pin, name):
+        return await self._change(lambda c: c.pair(pairing_id, pin, name),
                                   "Not paired: the PIN was wrong, or the guest gave up")
 
     async def disconnect(self, uuid):

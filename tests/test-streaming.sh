@@ -92,14 +92,15 @@ async def main():
     m, p, h, b = stub.reqs[-1]
     check("authenticates as novadeck, newline stripped", h["authorization"], "Basic " + base64.b64encode(b"novadeck:secret").decode())
     check("sends no Origin or Referer, which Sunshine's CSRF check would want a token for", {"origin", "referer"} & set(h), set())
-    check("lists pending pairings", await c.pending(), [{"id": PID, "name": "phone", "address": "10.0.0.2"}])
+    check("lists pending pairings", await c.pending(), [{"id": PID, "address": "10.0.0.2"}])
+    check("without the name the guest sent: every Moonlight sends the same one", "name" in (await c.pending())[0], False)
 
-    check("pairs", await c.pair(PID, "1234"), True)
+    check("pairs", await c.pair(PID, "1234", "Sam"), True)
     m, p, h, b = stub.reqs[-1]
-    check("with Sunshine's field names, and the name from its own list", (m, p, b), ("POST", "/api/pin", {"pairing_id": PID, "pin": "1234", "name": "phone"}))
+    check("with Sunshine's field names, and the name the host gave", (m, p, b), ("POST", "/api/pin", {"pairing_id": PID, "pin": "1234", "name": "Sam"}))
     check("as JSON", h["content-type"], "application/json")
     stub.over[("POST", "/api/pin")] = (200, {"status": False})
-    check("a wrong PIN is False, not an error", await c.pair(PID, "0000"), False)
+    check("a wrong PIN is False, not an error", await c.pair(PID, "0000", "Sam"), False)
     del stub.over[("POST", "/api/pin")]
 
     n = len(stub.reqs)
@@ -107,24 +108,22 @@ async def main():
         try: await coro
         except api.ApiError: return True
         return False
-    for label, args in (("a short PIN", (PID, "123")), ("a PIN with letters", (PID, "12a4")),
-                        ("other digits than 0-9", (PID, "١٢٣٤")), ("a bad pairing id", ("../x", "1234"))):
+    for label, args in (("a short PIN", (PID, "123", "x")), ("a PIN with letters", (PID, "12a4", "x")),
+                        ("other digits than 0-9", (PID, "١٢٣٤", "x")), ("a bad pairing id", ("../x", "1234", "x"))):
         check(f"refuses {label}", await refused(c.pair(*args)))
     check("refuses a bad uuid", await refused(c.disconnect("x/../y")))
     check("and none of those reached Sunshine", len(stub.reqs), n)
 
-    check("refuses a guest who is no longer asking", await refused(c.pair("cd" * 16, "1234")))
+    check("refuses a guest who is no longer asking", await refused(c.pair("cd" * 16, "1234", "x")))
     check("without sending the PIN", [m for m, *_ in stub.reqs[n:]], ["GET"])
     async def named(raw):
-        stub.over[("GET", "/api/pin")] = (200, {"pairings": [{"id": PID, "name": raw, "address": "10.0.0.2"}]})
-        shown = (await c.pending())[0]["name"]
-        await c.pair(PID, "1234"); del stub.over[("GET", "/api/pin")]
-        return shown, stub.reqs[-1][3]["name"]
-    check("a name cannot hide or turn text round", await named("M\u202eax\u200b\x07 \n\n  2"), ("Max 2", "Max 2"))
-    shown, sent = await named("日" * 99)
-    check("a long non-Latin name still fits Sunshine's 128 bytes", (shown == sent, len(sent.encode()) <= 128, set(sent)), (True, True, {"日"}))
-    check("a guest with no name is paired as Guest", (await named("\u200b"))[1], "Guest")
-    check("a lone surrogate in a name is dropped", (await named("a\ud800b"))[0], "ab")
+        await c.pair(PID, "1234", raw)
+        return stub.reqs[-1][3]["name"]
+    check("a name cannot hide or turn text round", await named("S\u202ea\u200bm\x07 \n\n  2"), "Sam 2")
+    sent = await named("日" * 99)
+    check("a long non-Latin name still fits Sunshine's 128 bytes", (len(sent.encode()) <= 128, set(sent)), (True, {"日"}))
+    check("no name: the guest is known by address", [await named(n) for n in ("", "\u200b", None)], ["Guest at 10.0.0.2"] * 3)
+    check("a lone surrogate in a name is dropped", await named("a\ud800b"), "ab")
 
     stub.reqs.clear(); check("disconnects", await c.disconnect(UUID), True)
     check("by blocking, which ends the session and removes the pad, then allowing again",
@@ -167,7 +166,7 @@ async def main():
     # -- cancelling: the plugin must be able to stop during a pairing
     hang = await asyncio.start_server(lambda r, w: asyncio.sleep(60), "127.0.0.1", 0, ssl=sctx)
     hc = api.Client(uid=me, password_file=P("pw"), cert_file=P("sunshine.pem"), port=hang.sockets[0].getsockname()[1])
-    t = asyncio.create_task(hc.pair(PID, "1234")); await asyncio.sleep(0.3); t.cancel()
+    t = asyncio.create_task(hc.pair(PID, "1234", "x")); await asyncio.sleep(0.3); t.cancel()
     done, _ = await asyncio.wait({t}, timeout=2)
     check("a pairing in flight can be cancelled", bool(done))
     hang.close()
@@ -250,8 +249,8 @@ grep -A8 'const onToggle' "$SRC/Content.tsx" | grep -q 'streaming === 0' && grep
 # Steam parses only these; @decky/ui types it as any string, so tsc cannot catch "horizontal".
 check_flow=$(grep -ohE 'flow-children="[^"]*"' "$SRC"/*.tsx | sort -u | grep -vE '"(row|column)"')
 [[ -z $check_flow ]] && ok "every flow-children is one Steam parses" || bad "Steam ignores $check_flow"
-awk '/pending\.address/ && !a {a=NR} /pending\.name/ && !n {n=NR} END {exit !(a && n && a < n)}' "$SRC/PinDialog.tsx" \
-    && ok "the PIN dialog names the address before the name the guest chose" || bad "the PIN dialog leads with a name the guest chose"
+grep -q 'pending\.address' "$SRC/PinDialog.tsx" && ! grep -rqE '(pending|p)\.name' "$SRC" \
+    && ok "a guest who asks is identified by address, never by a name they send" || bad "a screen shows the name a guest sent"
 grep -q 'setInterval' "$SRC"/*.tsx && bad "polls can overlap (setInterval)" || ok "the next poll waits for the last one"
 grep -q 'menus included' "$SRC/Content.tsx" && grep -q 'menus included' "$SRC/PinDialog.tsx" \
     && ok "both screens say guests reach the menus" || bad "a screen no longer says guests reach the menus"

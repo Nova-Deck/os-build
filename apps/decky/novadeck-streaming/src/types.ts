@@ -1,5 +1,5 @@
 export type Guest = { uuid: string; name: string; enabled: boolean };
-export type Pending = { id: string; name: string; address: string };
+export type Pending = { id: string; address: string };
 
 // main.py _state. `guests` and `pending` are null while Sunshine is not answering: unknown, not empty.
 export type State = {

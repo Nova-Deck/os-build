@@ -42,7 +42,7 @@ class ApiError(Exception):
 
 
 def _text(value):
-    """A guest chooses this text, before anyone has accepted them. Control and format characters
+    """A name as it is shown and stored. Control and format characters
     (a right-to-left override, a zero-width space) go, and the length is Sunshine's limit in BYTES."""
     if not isinstance(value, str):
         return ""
@@ -134,14 +134,16 @@ class Client:
                 if isinstance(row.get("uuid"), str) and UUID.fullmatch(row["uuid"])]
 
     async def pending(self):
-        return [{"id": row["id"], "name": _text(row.get("name")), "address": _text(row.get("address"))}
+        """Who is asking to join, by address. Not by name: Moonlight sends the same one ("roth") from
+        every device, and it is the guest's to choose before anyone has accepted them."""
+        return [{"id": row["id"], "address": _text(row.get("address"))}
                 for row in await self._list("/api/pin", "pairings")
                 if isinstance(row.get("id"), str) and PAIRING_ID.fullmatch(row["id"])]
 
-    async def pair(self, pairing_id, pin):
+    async def pair(self, pairing_id, pin, name):
         """True once the guest is paired; False when Sunshine says it did not happen (a wrong PIN,
         or a guest that gave up). Either way this pairing id is spent: a guest who tries again gets
-        a new one. The name is the one Sunshine lists for it, never one the caller brings."""
+        a new one. The host names the guest; without a name they are known by address."""
         if not isinstance(pairing_id, str) or not PAIRING_ID.fullmatch(pairing_id):
             raise ApiError("not a pairing id")
         if not isinstance(pin, str) or not PIN.fullmatch(pin):
@@ -150,7 +152,8 @@ class Client:
         if not asking:
             raise ApiError("this guest is no longer asking to join")
         answer = await self._call(
-            "POST", "/api/pin", {"pairing_id": pairing_id, "pin": pin, "name": asking[0]["name"] or "Guest"},
+            "POST", "/api/pin", {"pairing_id": pairing_id, "pin": pin, 
+             "name": _text(name) or f"Guest at {asking[0]['address']}"},
             PAIR_TIMEOUT)
         return answer.get("status") is True
 

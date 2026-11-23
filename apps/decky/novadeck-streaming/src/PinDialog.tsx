@@ -9,6 +9,7 @@ type Props = { pending: Pending; onState: (s: State) => void; closeModal?: () =>
 
 function PinDialog({ pending, onState, closeModal }: Props) {
   const [pin, setPin] = useState("");
+  const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -19,7 +20,7 @@ function PinDialog({ pending, onState, closeModal }: Props) {
     try {
       // Closes whatever the answer: this pairing is spent, and a guest who tries again shows up in
       // the panel as a new one. The panel says what went wrong.
-      onState(await pair(pending.id, pin));
+      onState(await pair(pending.id, pin, name));
       closeModal?.();
       return;
     } catch {
@@ -33,10 +34,9 @@ function PinDialog({ pending, onState, closeModal }: Props) {
       <DialogHeader>Pair a guest</DialogHeader>
       <DialogBody>
         <div style={{ marginBottom: "12px" }}>
-          {/* The address first: Sunshine measured it. The name is whatever the device says. */}
-          A device at <b>{pending.address || "an unknown address"}</b>
-          {pending.name ? ` calls itself “${pending.name}”` : ""}. Type the PIN its Moonlight shows, only if you
-          know who it is. A paired guest controls this device like a second controller, Steam&apos;s menus included.
+          {/* By address, which Sunshine measured: every Moonlight sends the same device name. */}
+          A device at <b>{pending.address || "an unknown address"}</b> asks to join. Type the PIN its Moonlight shows,
+          only if you know who it is. A paired guest controls this device like a second controller, Steam&apos;s menus included.
         </div>
         <TextField
           label="PIN"
@@ -45,6 +45,7 @@ function PinDialog({ pending, onState, closeModal }: Props) {
           disabled={busy}
           onChange={(e) => setPin(e.target.value.replace(/[^0-9]/g, "").slice(0, PIN_LENGTH))}
         />
+        <TextField label="Name for this guest" value={name} disabled={busy} onChange={(e) => setName(e.target.value)} />
         {problem && <div style={{ marginTop: "12px" }}>{problem}</div>}
       </DialogBody>
       <DialogFooter>

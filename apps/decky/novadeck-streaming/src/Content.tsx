@@ -128,7 +128,7 @@ export function Content() {
         <PanelSection title="New guest">
           {state.pending.map((p) => (
             <PanelSectionRow key={p.id}>
-              <ButtonItem layout="below" description={p.name ? `Calls itself “${p.name}”` : undefined} onClick={() => showPinDialog(p, keep)}>
+              <ButtonItem layout="below" onClick={() => showPinDialog(p, keep)}>
                 Enter the PIN of {p.address || "a guest"}
               </ButtonItem>
             </PanelSectionRow>

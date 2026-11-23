@@ -365,8 +365,10 @@ stream piped back to the host; nothing written on the card.
     FIT's Guide opens. So quitting the game, Settings and the power menu are in a guest's reach. Not looked
     into: making Steam ignore one controller in its UI.
   - **Keyboard and mouse off (user decision, 2026-11-23), now the shipped default.** `mouse = disabled` also drops
-    touch and pen (`src/input.cpp:1374`). Taps on the Max did not reach the FIT (user); no run with the mouse on
-    to compare. Sunshine still creates its keyboard and mice at start, and a touchscreen and a pen per session.
+    touch and pen (`src/input.cpp:1374`). With the Max and a PC connected, the FIT's virtual keyboard and absolute
+    mouse emitted 0 events while the user typed and moved the mouse on the PC, and the Max's pad did (control).
+    The relative mouse, touch and pen also counted 0 in a second run, but nobody confirmed PC input during it.
+    Not compared with a run with the mouse on. Sunshine still creates its keyboard and mice at start, and a touchscreen and a pen per session.
 - **Leaving: two paths, both seen mid-game, the Max player 2 again after each (user + logs).**
   - **Moonlight closed from Steam's menu** (the normal way out on novadeck): the pad stays plugged in, neutral;
     coming back sends `resume` and reuses it, the game sees nothing. Sunshine keeps it per paired client while
@@ -382,8 +384,16 @@ stream piped back to the host; nothing written on the card.
   and `SwapControllerOrder`, names from `@decky/ui`'s types, behaviour unverified); an Epic/GOG tile with Steam
   Input off, where the game sees raw pads; a game that looks for pads only at launch.
 - Two clients: this Sunshine has no `channels` option and I found no limit on sessions (63d35f7); the second client
-  sends `resume`, and only the first one's "mute host" choice counts. One iris encode session per client:
-  measure 2 clients on SM8250.
+  sends `resume`, and only the first one's "mute host" choice counts.
+  **Two at once run on the FIT (2026-11-23, Max + PC):** two HEVC 1080p60 15 Mbit/s iris sessions, busiest Sunshine
+  threads 8% audio and 5% session, no kernel error, two slots unchanged. The PC had no gamepad, so a third pad, its
+  slot and Guide from a PC are untested. Stopped by the user before the rejoin order and the Quit test, and with
+  no drop figures (Moonlight prints them at the end). Measure 2 clients on SM8250.
+- **Network drops, Max client, one client (2026-11-23):** 0.00, 1.02, 0.00 and 5.10% over four sessions (earlier
+  cards: 0). The 1.02% session (8.6 min, PGRC) lost 32 frames in a row once, and had one 510 ms host frame, when not
+  logged. The 5.10% one (2 min) reported a poor link while PGRC was closing. Journals show nothing; both devices
+  share one 5 GHz channel. Cause unknown; the user saw a clean picture. Candidate not tried: the refused
+  `setpriority` (step 5).
 
 ### 7. Its own Decky plugin (user decision, 2026-11-20)
 A new plugin, `apps/decky/novadeck-<name>` (name TBD; the repo convention, beside `novadeck-stores`),

@@ -157,6 +157,13 @@ class Client:
             PAIR_TIMEOUT)
         return answer.get("status") is True
 
+    async def dismiss(self, pairing_id):
+        """Turn away someone who asks. Sunshine otherwise holds the request for minutes, and refuses
+        the same device until then."""
+        if not isinstance(pairing_id, str) or not PAIRING_ID.fullmatch(pairing_id):
+            raise ApiError("not a pairing id")
+        return (await self._call("DELETE", "/api/pin", {"pairing_id": pairing_id})).get("status") is True
+
     async def _set_enabled(self, uuid, enabled):
         _need_uuid(uuid)
         answer = await self._call("POST", "/api/clients/update", {"uuid": uuid, "enabled": enabled},

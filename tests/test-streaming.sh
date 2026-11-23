@@ -31,7 +31,7 @@ for n in sunshine other; do
 done
 
 out=$(python3 - "$PLUGIN" "$TMP" <<'PY'
-import asyncio, base64, json, os, ssl, sys
+import asyncio, base64, json, os, ssl, sys, time
 plugin, tmp = sys.argv[1:3]
 sys.path.insert(0, os.path.join(plugin, "py_modules"))
 from novadeck_streaming import api, sessions, unit, userfile
@@ -125,6 +125,9 @@ async def main():
     check("no name: the guest is known by address", [await named(n) for n in ("", "\u200b", None)], ["Guest at 10.0.0.2"] * 3)
     check("a lone surrogate in a name is dropped", await named("a\ud800b"), "ab")
 
+    stub.reqs.clear(); check("dismisses someone asking", await c.dismiss(PID), True)
+    check("through Sunshine's own call", stub.reqs[-1][0:2] + (stub.reqs[-1][3],), ("DELETE", "/api/pin", {"pairing_id": PID}))
+    check("refuses to dismiss a bad id", await refused(c.dismiss("x")))
     stub.reqs.clear(); check("disconnects", await c.disconnect(UUID), True)
     check("by blocking, which ends the session and removes the pad, then allowing again",
           [(p, b) for _, p, _, b in stub.reqs],
@@ -206,14 +209,31 @@ check("children never inherit PyInstaller's library path", [k for k in unit.clea
 from novadeck_streaming import join, hosts
 line = lambda *e: json.dumps({"browserServiceData": [{"updateFlag": f, "family": 2, "name": n, "type": "_nvstream._tcp", "domain": "local", "ifindex": 2} for f, n in e]})
 check("browsing keeps what is there at the end", join.parse_browse("\n".join([line(("added", "a"), ("added", "b")), line(("removed", "a")), "junk", "[]", ""])), ["b"])
-check("a name that is not an instance is dropped", join.parse_browse(line(("added", "x" * 64), ("added", "a\nb"), ("added", ""))), [])
+check("a name that is not an instance is dropped", join.parse_browse(line(("added", "x" * 64), ("added", "a\nb"), ("added", ""), ("added", "--address=unixexec:path=/bin/sh"), ("added", "-h"))), [])
 svc = lambda ip, port=47989: json.dumps({"type": "x", "data": [[[0, 0, port, "novadeck8.local", [[2, 2, ip]], "novadeck8.local"]], [], "n", "t", "local", 1]})
 check("a resolved service gives its address", join.parse_service(svc([192, 168, 1, 217])), "192.168.1.217")
 for label, text in (("loopback", svc([127, 0, 0, 1])), ("multicast", svc([224, 0, 0, 1])), ("unspecified", svc([0, 0, 0, 0])), ("link-local", svc([169, 254, 1, 1])),
-                    ("another port", svc([192, 168, 1, 2], 22)), ("a short address", svc([1, 2])), ("no JSON", "x"), ("no data", "{}")):
+                    ("a public address", svc([8, 8, 8, 8])), ("another port", svc([192, 168, 1, 2], 22)), ("a short address", svc([1, 2])), ("no JSON", "x"), ("no data", "{}")):
     check(f"a service answering with {label} is dropped: the LAN decides what it says", join.parse_service(text), None)
-check("typed addresses are IPv4 and nothing else", [join.valid_address(a) for a in ("192.168.1.2", " 10.0.0.1 ", "127.0.0.1", "host", "1.2.3", "::1", "192.168.1.2; x", None, "-h")],
-      ["192.168.1.2", "10.0.0.1"] + [None] * 7)
+async def searching():
+    put("tool", b"#!/bin/bash\nprintf '%s|' \"$@\" >> " + P("tcalls").encode() + b"; echo >> " + P("tcalls").encode() + b"\n" +
+        b"case \"$*\" in *BrowseServices*) echo '" + line(("added", "a"), ("added", "b")).encode() + b"';; *ResolveService*' a '*) echo '" + svc([192, 168, 1, 217]).encode() + b"';; *) echo '" + svc([192, 168, 1, 66]).encode() + b"';; esac\n", 0o700)
+    join.VARLINKCTL = join.BUSCTL = P("tool"); join.as_user = lambda: ["/usr/bin/env", "AS=deck"]
+    async def info(address): return {"name": "FIT", "uuid": "92B19CB9-E03F-2E0B-0D97-0F1E37570B6B"}
+    keep, join._serverinfo = join._serverinfo, info
+    found = await join.discover()
+    check("a host whose id another one copies is not replaced by it", sorted(h["address"] for h in found), ["192.168.1.217", "192.168.1.66"])
+    check("this device is left out", [h["address"] for h in await join.discover("192.168.1.66")], ["192.168.1.217"])
+    ran = open(P("tcalls")).read()
+    check("a name from the LAN comes after the end of options", all("|--|" in l for l in ran.splitlines() if "ResolveService" in l), True)
+    seen = []
+    async def spy(*argv, seconds): seen.append(argv[0:2]); return ""
+    real, join._output = join._output, spy; await join.discover(); await join._find("a")
+    check("every discovery command runs as the user, never root", seen, [("/usr/bin/env", "AS=deck")] * 2)
+    join._output, join._serverinfo = real, keep
+asyncio.run(searching())
+check("typed addresses are IPv4 and nothing else", [join.valid_address(a) for a in ("192.168.1.2", " 10.0.0.1 ", "127.0.0.1", "host", "1.2.3", "::1", "192.168.1.2; x", None, "-h", "8.8.8.8", "100.64.0.9")],
+      ["192.168.1.2", "10.0.0.1"] + [None] * 8 + ["100.64.0.9"])
 U2 = "92B19CB9-E03F-2E0B-0D97-0F1E37570B6B"
 xml = lambda name, uid=U2: f'<?xml version="1.0"?><root status_code="200"><hostname>{name}</hostname><uniqueid>{uid}</uniqueid></root>'
 check("a host says its name and id", join.parse_serverinfo(xml("KONKR Pocket FIT")), {"name": "KONKR Pocket FIT", "uuid": U2})
@@ -246,6 +266,19 @@ async def pairing():
     moonlight(ok_, paired_after=9); check("believing the log is not enough", bool(await join.pair("10.0.0.2", "1234")))
     moonlight("echo '00:00:01 - Qt Critical: Incorrect PIN' >&2"); check("a wrong PIN says so", "PIN" in (await join.pair("10.0.0.2", "1234") or ""))
     check("and stops Moonlight too", alive(), False)
+    async def quick(cmd):
+        t = time.time(); moonlight(cmd); r = await join.pair("10.0.0.2", "1234"); return r or "", time.time() - t < 5
+    req = 'echo \'00:00:00 - Qt Info: Executing request: "http://h:47989/pair?x"\' >&2; '
+    r, fast = await quick(req + "echo '00:00:00 - Qt Warning: Request failed: 409 \"x\"' >&2")
+    check("a host still holding the last attempt says so, at once", ("last attempt" in r, fast, alive()), (True, True, False))
+    for label, cmd in (("another refused request", req + "echo '00:00:00 - Qt Warning: Request failed: 500 x' >&2"),
+                       ("a failed stage", req + "echo '00:00:00 - Qt Critical: Failed pairing at stage #2' >&2"),
+                       ("a host someone else is pairing", req + "echo '00:00:00 - Qt Critical: Server likely already pairing' >&2"),
+                       ("an interception", req + "echo '00:00:00 - Qt Critical: MITM detected' >&2"),
+                       ("a dropped connection", req + "echo '00:00:00 - Qt Warning: \"pair\" request failed with error: 1' >&2")):
+        r, fast = await quick(cmd); check(f"{label} is a failure, at once, and not blamed on the PIN", (bool(r), "PIN" in r, fast), (True, False, True))
+    moonlight("echo '00:00:00 - Qt Warning: Request failed: 404 x' >&2; " + ok_)
+    check("a failed request before the pairing began is not the pairing's", await join.pair("10.0.0.2", "1234"), None)
     moonlight("exit 3"); check("a Moonlight that ends early is a failure", bool(await join.pair("10.0.0.2", "1234")))
     moonlight("true"); join.PAIR_LIMIT, keep = 0.6, join.PAIR_LIMIT
     check("a host that never answers times out", bool(await join.pair("10.0.0.2", "1234"))); join.PAIR_LIMIT = keep
@@ -265,6 +298,9 @@ async def registry():
     check("a signed appid is stored as Steam's file has it", (await hosts.remember(H, me, U2, "FIT", -1364054426), hosts.load(H, me)[U2]["appid"])[1], 2930912870)
     check("a bad id is refused", await hosts.remember(H, me, "../x", "n", 1), False)
     check("a bad appid is refused", await hosts.remember(H, me, U2, "n", "1"), False)
+    full = {f"92B19CB9-E03F-2E0B-0D97-{i:012X}": {"name": "n", "appid": i + 1} for i in range(hosts.MAX_HOSTS)}
+    open(H, "w").write(json.dumps(full)); check("a full registry takes no more", await hosts.remember(H, me, "92B19CB9-E03F-2E0B-0D97-FFFFFFFFFFFF", "n", 1), False)
+    check("but still changes one it has", await hosts.remember(H, me, list(full)[0], "new", 9)); os.unlink(H); await hosts.remember(H, me, U2, "FIT", 1)
     check("forgets", (await hosts.forget(H, me, U2), hosts.load(H, me))[1], {})
     check("the file is private", oct(os.stat(H).st_mode & 0o777), "0o600")
     os.symlink(H, P("cfg/link.json")); check("a registry that is a link is an error, never an empty list", hosts.load(P("cfg/link.json"), me), None)
@@ -328,6 +364,13 @@ async def joining():
     async def wrong(address, pin): return "The PIN typed on the host was not this one"
     M.join.pair = wrong; await pl.start_join("192.168.1.217"); await asyncio.sleep(0.05)
     check("a failed join says why", (await pl.join_status())["problem"], "The PIN typed on the host was not this one")
+    async def boom(address, pin): raise KeyError("x")
+    M.join.pair = boom; await pl.start_join("192.168.1.217"); await asyncio.sleep(0.05)
+    check("an error nobody expected is a failure, not a stopped pairing", (await pl.join_status())["state"], "failed")
+    runs = []
+    async def slow(own): runs.append(1); await asyncio.sleep(0.2); return []
+    M.join.discover = slow; await asyncio.gather(*(pl.find_hosts() for _ in range(5)))
+    check("searches do not run side by side", len(runs), 1)
     stopped = []
     async def forever(address, pin):
         try: await asyncio.sleep(60)
@@ -342,7 +385,7 @@ PY
 while IFS= read -r line; do
     case $line in "ok   "*) ok "${line#ok   }" ;; "FAIL "*) bad "${line#FAIL }" ;; ?*) echo "$line" ;; esac
 done <<<"$out"
-[[ $(grep -c '^ok ' <<<"$out") -ge 136 ]] || bad "fewer backend checks ran than expected"
+[[ $(grep -c '^ok ' <<<"$out") -ge 155 ]] || bad "fewer backend checks ran than expected"
 
 echo "the panel"
 SRC="$PLUGIN/src"
@@ -370,7 +413,8 @@ grep -q 'const removeSunshineTab = applySunshineTab()' "$SRC/index.tsx" && grep 
     && ok "the tab patch is applied at load and removed at dismount" || bad "the tab patch is not removed at dismount"
 grep -q 'AddShortcut' "$SRC/tiles.ts" && ! grep -rq 'shortcuts\.vdf' "$PLUGIN/py_modules" "$PLUGIN/main.py" \
     && ok "tiles go through Steam, never its file" || bad "something other than Steam's API makes tiles"
-grep -A4 'if (kept.problem)' "$SRC/tiles.ts" | grep -q 'RemoveShortcut' && ok "a tile that could not be recorded is taken away again" || bad "an unrecorded tile would stay for good"
+grep -A14 'await rememberTile' "$SRC/tiles.ts" | grep -c 'RemoveShortcut' | grep -qx 2 && ok "a tile that could not be recorded is taken away again" || bad "an unrecorded tile would stay for good"
+grep -A3 'if (!live) {' "$SRC/JoinDialog.tsx" | grep -q 'cancelJoin()' && ok "a dialog closed while the host is asked leaves no pairing behind" || bad "a dialog closed early leaves a pairing running unseen"
 grep -A14 'return () => {' "$SRC/JoinDialog.tsx" | grep -q 'cancelJoin()' && ok "closing the dialog stops the pairing" || bad "a closed dialog leaves Moonlight waiting"
 grep -B3 -A9 'const forget = ' "$SRC/JoinSection.tsx" | grep -q 'ConfirmModal' && ok "forgetting a host asks first" || bad "forgetting a host does not ask first"
 for call in $(grep -ohE 'call<[^>]*>+\("[a-z_]+"' "$SRC/backend.ts" | sed -E 's/.*"([a-z_]+)"/\1/'); do

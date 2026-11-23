@@ -29,8 +29,14 @@ export async function ensureTile(host: Host): Promise<Hosts> {
   apps.SetShortcutName(appid, name);
   apps.SetShortcutLaunchOptions(appid, host.uuid);
   apps.SetShortcutStartDir(appid, LAUNCHER_DIR);
-  const kept = await rememberTile(host.uuid, name, appid);
   // A tile we could not write down is one we could never take away.
+  let kept: Hosts;
+  try {
+    kept = await rememberTile(host.uuid, name, appid);
+  } catch (e) {
+    apps.RemoveShortcut(appid >>> 0);
+    throw e;
+  }
   if (kept.problem) apps.RemoveShortcut(appid >>> 0);
   scheduleTabRefresh();
   return kept;

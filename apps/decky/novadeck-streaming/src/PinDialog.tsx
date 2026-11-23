@@ -1,6 +1,6 @@
 import { DialogButton, DialogBody, DialogFooter, DialogHeader, Focusable, ModalRoot, TextField, showModal } from "@decky/ui";
 import { useState } from "react";
-import { pair } from "./backend";
+import { dismiss, pair } from "./backend";
 import type { Pending, State } from "./types";
 
 const PIN_LENGTH = 4;
@@ -21,6 +21,18 @@ function PinDialog({ pending, onState, closeModal }: Props) {
       // Closes whatever the answer: this pairing is spent, and a guest who tries again shows up in
       // the panel as a new one. The panel says what went wrong.
       onState(await pair(pending.id, pin, name));
+      closeModal?.();
+      return;
+    } catch {
+      setProblem("The plugin did not answer");
+    }
+    setBusy(false);
+  };
+
+  const turnAway = async () => {
+    setBusy(true);
+    try {
+      onState(await dismiss(pending.id));
       closeModal?.();
       return;
     } catch {
@@ -53,7 +65,8 @@ function PinDialog({ pending, onState, closeModal }: Props) {
           <DialogButton disabled={busy || pin.length !== PIN_LENGTH} onClick={() => void submit()}>
             {busy ? "Pairing…" : "Pair"}
           </DialogButton>
-          <DialogButton onClick={closeModal}>Cancel</DialogButton>
+          <DialogButton disabled={busy} onClick={() => void turnAway()}>Dismiss</DialogButton>
+          <DialogButton onClick={closeModal}>Close</DialogButton>
         </Focusable>
       </DialogFooter>
     </ModalRoot>

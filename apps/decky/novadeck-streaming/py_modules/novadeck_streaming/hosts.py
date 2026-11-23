@@ -13,6 +13,7 @@ import os
 from novadeck_streaming import api, unit, user, userfile
 
 MAX_FILE = 64 * 1024
+MAX_HOSTS = 64
 TIMEOUT = 5
 # $0 is the file. Same directory, so the rename replaces it whole.
 WRITE = ('umask 077; d="${0%/*}"; mkdir -p "$d" && t="$(mktemp "$d/.hosts.XXXXXX")" && cat >"$t" '
@@ -59,6 +60,8 @@ async def _save(path, rows):
 async def remember(path, uid, uuid, name, appid):
     rows = load(path, uid)
     if rows is None or _u32(appid) is None or not isinstance(uuid, str) or not api.UUID.fullmatch(uuid):
+        return False
+    if uuid not in rows and len(rows) >= MAX_HOSTS:
         return False
     return await _save(path, {**rows, uuid: {"name": api._text(name), "appid": _u32(appid)}})
 

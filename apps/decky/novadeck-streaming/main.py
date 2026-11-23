@@ -63,6 +63,9 @@ class Plugin:
         return await self._change(lambda c: c.pair(pairing_id, pin, name),
                                   "Not paired: the PIN was wrong, or the guest gave up")
 
+    async def dismiss(self, pairing_id):
+        return await self._change(lambda c: c.dismiss(pairing_id), "Sunshine did not dismiss this request")
+
     async def disconnect(self, uuid):
         return await self._change(lambda c: c.disconnect(uuid), "Sunshine did not disconnect this guest")
 
@@ -102,13 +105,17 @@ class Plugin:
 
     _join = None
     _joined = None
+    _search = None
 
     async def get_hosts(self):
         return self._hosts()
 
     async def find_hosts(self):
+        # One search at a time, and a second call gets the first one's answer.
+        if self._search is None or self._search.done():
+            self._search = asyncio.create_task(join.discover(_address()))
+        found = await asyncio.shield(self._search)
         known = hosts.load(_hosts_file(), _account().pw_uid) or {}
-        found = await join.discover(_address())
         return {"found": [{**host, "joined": host["uuid"] in known} for host in found]}
 
     async def start_join(self, address):
@@ -131,9 +138,9 @@ class Plugin:
     async def _run_join(self, host, pin):
         try:
             problem = await join.pair(host["address"], pin)
-        except OSError as exc:
-            decky.logger.warning("moonlight could not run: %s", exc)
-            problem = "Moonlight could not be started"
+        except Exception as exc:  # noqa: BLE001 - whatever it was, the dialog must be told
+            decky.logger.error("pairing failed: %s: %s", type(exc).__name__, exc)
+            problem = "Moonlight could not be run"
         self._joined = {"state": "failed" if problem else "paired", "problem": problem, "host": host}
 
     async def join_status(self):
@@ -168,4 +175,6 @@ class Plugin:
         return {"hosts": [{"uuid": uuid, **row} for uuid, row in rows.items()], "problem": problem}
 
     async def _unload(self):
+        if self._search and not self._search.done():
+            self._search.cancel()
         await self.cancel_join()

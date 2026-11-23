@@ -7,10 +7,12 @@ import type { FoundHost, Hosts, TileHost } from "./types";
 
 // Kept across remounts: the panel under a modal does not reliably stay mounted.
 let lastHosts: Hosts | null = null;
+let lastFound: FoundHost[] | null = null;
 
 export function JoinSection() {
   const [hosts, setHosts] = useState<Hosts | null>(lastHosts);
-  const [found, setFound] = useState<FoundHost[] | null>(null);
+  const [found, setFound] = useState<FoundHost[] | null>(lastFound);
+  const [error, setError] = useState<string | null>(null);
   const [looking, setLooking] = useState(false);
 
   const keep = (next: Hosts) => {
@@ -20,7 +22,7 @@ export function JoinSection() {
 
   useEffect(() => {
     let live = true;
-    getHosts().then((h) => live && keep(h)).catch(() => {});
+    getHosts().then((h) => live && keep(h)).catch(() => live && setError("The plugin did not answer"));
     return () => {
       live = false;
     };
@@ -28,10 +30,13 @@ export function JoinSection() {
 
   const look = async () => {
     setLooking(true);
+    setError(null);
     try {
-      setFound((await findHosts()).found);
+      lastFound = (await findHosts()).found;
+      setFound(lastFound);
     } catch {
-      setFound([]);
+      // Not "none found": the search did not happen.
+      setError("The search did not run");
     }
     setLooking(false);
   };
@@ -54,19 +59,20 @@ export function JoinSection() {
           <ButtonItem layout="below" disabled={looking} onClick={() => void look()}>{looking ? "Looking…" : "Find hosts"}</ButtonItem>
         </PanelSectionRow>
         {found?.map((h) => (
-          <PanelSectionRow key={h.uuid}>
-            <ButtonItem layout="below" disabled={h.joined} description={h.joined ? "Already in your library" : h.address} onClick={() => showJoinDialog(h.address, h.name || h.address, keep)}>
+          <PanelSectionRow key={`${h.uuid} ${h.address}`}>
+            {/* Selectable even when we have it: its owner may have removed this device since. */}
+            <ButtonItem layout="below" description={h.joined ? `${h.address}, in your library` : h.address} onClick={() => showJoinDialog(h.address, h.name || h.address, keep)}>
               {h.name || h.address}
             </ButtonItem>
           </PanelSectionRow>
         ))}
-        {found?.length === 0 && !looking && (
+        {found?.length === 0 && !looking && !error && (
           <PanelSectionRow><Field label="No host found" description="Hosting must be on there, on this network." /></PanelSectionRow>
         )}
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={() => showAddressDialog(keep)}>Enter an address</ButtonItem>
         </PanelSectionRow>
-        {hosts?.problem && <PanelSectionRow><Field label={hosts.problem} /></PanelSectionRow>}
+        {(error || hosts?.problem) && <PanelSectionRow><Field label={error ?? hosts?.problem} /></PanelSectionRow>}
       </PanelSection>
       {hosts && hosts.hosts.length > 0 && (
         <PanelSection title="Hosts in your library">

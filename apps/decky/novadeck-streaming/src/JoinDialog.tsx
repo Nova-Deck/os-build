@@ -43,7 +43,11 @@ function JoinDialog({ address, title, onHosts, closeModal }: Props) {
     };
     void startJoin(address)
       .then((started) => {
-        if (!live) return;
+        if (!live) {
+          // Closed while the host was being asked: the cleanup below had nothing to stop yet.
+          void cancelJoin();
+          return;
+        }
         if (started.problem || !started.pin) {
           finish(started.problem ?? "The plugin did not answer");
           return;

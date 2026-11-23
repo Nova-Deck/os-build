@@ -3,8 +3,8 @@
 Everything read here comes from the LAN and is believed about nothing: addresses are checked before
 they are contacted, names are cleaned before they are shown, and no XML parser runs on an answer.
 
-Discovery is systemd-resolved's, never Moonlight's: at every start Moonlight sends Wake-on-LAN to each
-host it knows. Pairing is Moonlight's own, offscreen. It never exits after pairing (both outcomes end
+Nothing here runs as root: every command runs as the session user, a name from the LAN among their
+arguments. Discovery is systemd-resolved's: Moonlight only browses with its window open. Pairing is Moonlight's own, offscreen. It never exits after pairing (both outcomes end
 in a dialog), and without `offscreen` it drives the screen directly, so it is watched, stopped, and
 never run any other way. `moonlight list` is what says whether a host is paired: it exits 0 only then.
 """
@@ -28,12 +28,14 @@ BROWSE_SECONDS = 4
 QUERY_TIMEOUT = 6
 # The other person has to find the panel and type four digits.
 PAIR_LIMIT = 180
-LIST_LIMIT = 25
+# Moonlight gives up on a host, and on its app list, after 30 s in all.
+LIST_LIMIT = 35
 # Moonlight saves what it paired from its own thread.
-GRACE = 2
+GRACE = 3
 MAX_HOSTS = 16
 MAX_INFO = 64 * 1024
-INSTANCE = re.compile(r"[^\x00-\x1f\x7f]{1,63}")
+# Never an option: no leading dash.
+INSTANCE = re.compile(r"(?!-)[^\x00-\x1f\x7f]{1,63}")
 
 as_user = user.prefix
 
@@ -50,7 +52,9 @@ def valid_address(text):
         ip = ipaddress.IPv4Address(text.strip())
     except ValueError:
         return None
-    unusable = ip.is_loopback or ip.is_multicast or ip.is_unspecified or ip.is_link_local or ip.is_reserved
+    # A private network, a VPN's 100.64/10 included, and not the internet.
+    unusable = (ip.is_global or ip.is_loopback or ip.is_multicast or ip.is_unspecified or ip.is_link_local
+                or ip.is_reserved)
     return None if unusable else str(ip)
 
 
@@ -155,7 +159,7 @@ async def _serverinfo(address):
 
 async def _find(name):
     address = parse_service(await _output(
-        BUSCTL, "--json=short", "call", "org.freedesktop.resolve1", "/org/freedesktop/resolve1",
+        *as_user(), BUSCTL, "--json=short", "call", "--", "org.freedesktop.resolve1", "/org/freedesktop/resolve1",
         "org.freedesktop.resolve1.Manager", "ResolveService", "isssit", "0", name, SERVICE, "local",
         str(int(socket.AF_INET)), "0", seconds=QUERY_TIMEOUT))
     info = await _serverinfo(address) if address else None
@@ -166,10 +170,11 @@ async def discover(own=None):
     """Hosts that answer, but not this device."""
     query = json.dumps({"domain": "local", "type": SERVICE, "ifindex": 0, "flags": 0})
     names = parse_browse(await _output(
-        VARLINKCTL, "--json=short", "--more", "call", RESOLVE, "io.systemd.Resolve.BrowseServices", query,
+        *as_user(), VARLINKCTL, "--json=short", "--more", "call", RESOLVE, "io.systemd.Resolve.BrowseServices", query,
         seconds=BROWSE_SECONDS))
     found = [h for h in await asyncio.gather(*(_find(n) for n in names)) if h and h["address"] != own]
-    return list({h["uuid"]: h for h in found}.values())
+    # By id AND address: a host's id is not proven, and one that copies another's must not replace it.
+    return list({(h["uuid"], h["address"]): h for h in found}.values())
 
 
 async def describe(address):
@@ -196,8 +201,10 @@ async def _paired(address):
 
 
 async def _answer(stream):
-    """None once Moonlight has sent the last step of a pairing, or why there is none."""
+    """None once Moonlight has sent the last step of a pairing, or why there is none. Every other
+    failure ends in a dialog nobody sees, so all it logs is all there is to go by."""
     buffer = b""
+    asked = False
     while chunk := await stream.read(4096):
         buffer += chunk
         *lines, buffer = buffer.split(b"\n")
@@ -205,8 +212,14 @@ async def _answer(stream):
         for line in lines:
             if b"Incorrect PIN" in line:
                 return "The PIN typed on the host was not this one"
-            if b"https://" in line and b"/pair?" in line:
-                return None
+            if b"/pair?" in line:
+                if b"https://" in line:
+                    return None
+                asked = True
+            if asked and b"Request failed: 409" in line:
+                return ("The host still has the last attempt open. Dismiss it there, or try again in five minutes")
+            if b"Qt Critical" in line or (asked and (b"Request failed" in line or b"request failed" in line)):
+                return "The host did not go through with the pairing"
     return "Moonlight stopped before it was paired"
 
 

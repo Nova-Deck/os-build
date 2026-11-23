@@ -5,6 +5,7 @@ import type { FoundHost, Hosts, JoinStart, JoinStatus, State } from "./types";
 export const getState = () => call<[], State>("get_state");
 export const setHosting = (on: boolean) => call<[boolean], State>("set_hosting", on);
 export const pair = (id: string, pin: string, name: string) => call<[string, string, string], State>("pair", id, pin, name);
+export const dismiss = (id: string) => call<[string], State>("dismiss", id);
 export const disconnect = (uuid: string) => call<[string], State>("disconnect", uuid);
 export const allow = (uuid: string) => call<[string], State>("allow", uuid);
 export const remove = (uuid: string) => call<[string], State>("remove", uuid);

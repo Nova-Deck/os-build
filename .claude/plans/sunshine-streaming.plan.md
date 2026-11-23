@@ -443,6 +443,9 @@ not a section of an existing panel. Two halves:
     Python (accepts `cacert.pem`, refuses another self-signed certificate); Decky's bundled Python owed. `POST
     /api/pin` answers once the pairing finished (source), so "paired" is what happened. A block that times out is
     followed by an allow. Accepted: software running as deck can reach Decky's backend and switch hosting on.
+    **Every Moonlight sends the device name "roth"** (`nvpairingmanager.cpp:235`): the host names the guest, and the
+    guest's own name is never shown. Listing, pairing (right and wrong PIN) and remove HW-passed against Sunshine on
+    the FIT with the system's Python; disconnect and the panel not yet.
     On hardware: the PIN dialog and the confirms by gamepad in the QAM, over a game too; Disconnect unplugs the pad.
   - **7b, advert. Written 2026-11-23, not on hardware.** `/usr/lib/novadeck/sunshine-advert`, run by the unit as root
     (`-+` on `ExecStartPost` and `ExecStopPost`): waits for 47989, clears a stale registration, registers
@@ -450,8 +453,13 @@ not a section of an existing panel. Two halves:
     limit: restarting systemd-resolved drops it until the next start. On hardware: Moonlight on the Max and on a PC list
     the FIT unasked; it disappears on stop; a SIGKILL leaves one registration, not a failed one; `resolvectl` on both
     devices with the same hostname. Open (asked): `sunshine_name` = the device model, or every host reads "novadeck".
-  - **7c, join.** Discovery, `moonlight pair`, per-host tiles, the Sunshine tab. First check: `moonlight pair` opens a
-    QML window (`CliPair.qml`) and needs a display, so it may have to run from a tile, or under `offscreen`.
+  - **7c, join.** Discovery, pairing, per-host tiles, the Sunshine tab; `sunshine_name` = the device model (user).
+    **Pairing from the plugin works, HW 2026-11-23 (Max -> FIT, the FIT driven by 7a's own client):**
+    `QT_QPA_PLATFORM=offscreen moonlight pair <host> --pin NNNN` as deck, no window, no exit of its own (success and
+    failure both end in a dialog), so watch and stop it. Right PIN: `True` in 0.1 s, the host's uuid and `srvcert`
+    are in `Moonlight.conf`. Wrong PIN: Moonlight logs `Incorrect PIN`; Sunshine answers `False` only after 10 s.
+    Without `offscreen` it drives the screen through DRM (refused): never run it bare. It sends Wake-on-LAN to every
+    host it knows at start, and refuses a host it is already paired with. Discovery must not use it.
   - **7d, security review**, then the HW test together with the `keep_host_audio` patch (step 5's unit on a new card).
 - **Duplicate tiles on the user's other devices (user, 2026-11-23; low priority, decide with this step).** Both test
   devices are signed in to the same Steam account, and Steam offers each one's shortcuts to the other for Remote

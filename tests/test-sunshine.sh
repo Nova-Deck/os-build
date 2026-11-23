@@ -69,6 +69,12 @@ check "a guest cannot type on the host" "$(confkey keyboard)" disabled
 check "a guest cannot move the host's pointer" "$(confkey mouse)" disabled
 # The controller is the point of hosting a co-op game, so it stays at Sunshine's default, on.
 check "a guest's controller is left on" "$(confkey controller)" ""
+check "a client cannot mute the host" "$(confkey keep_host_audio)" enabled
+# The option is ours: without the patch Sunshine only logs an unknown key, and the host goes silent.
+check "the patch that reads that option is in the package" \
+    "$(grep -lE '^\+.*"keep_host_audio"' "$ROOT"/packages/sunshine/patches/*.patch | wc -l)" 1
+check "the pin applies that patch" \
+    "$(grep -c "^patches:.*$(basename "$(grep -lE '^\+.*"keep_host_audio"' "$ROOT"/packages/sunshine/patches/*.patch)")" "$ROOT/packages/sunshine/source.pin")" 1
 check "log level leaves request headers out" "$(confkey min_log_level)" info
 check "credentials live in the runtime directory" \
     "$(confkey credentials_file)" "/run/$(unitkey RuntimeDirectory)/credentials.json"

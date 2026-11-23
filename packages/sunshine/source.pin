@@ -9,7 +9,9 @@
 #         offer upstream.
 #   0002  A panel scanned out at a 90-degree plane rotation (Pocket Max) swaps the output's sides,
 #         as 270 (Steam Deck) already did; it was cropped to its left square. To offer upstream.
+#   0003  keep_host_audio: the host's sound survives a client that asks to mute it (Moonlight's
+#         default). Off unless sunshine.conf turns it on, and ours does.
 name: sunshine
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
-patches: 0001-kmsgrab-capture-each-output-s-bottom-plane.patch 0002-kmsgrab-swap-the-output-s-sides-for-a-90-degree-pane.patch
+patches: 0001-kmsgrab-capture-each-output-s-bottom-plane.patch 0002-kmsgrab-swap-the-output-s-sides-for-a-90-degree-pane.patch 0003-audio-let-the-host-refuse-to-be-muted-by-a-client.patch

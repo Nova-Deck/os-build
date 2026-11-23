@@ -29,9 +29,9 @@
 #   -DSUNSHINE_ENABLE_CUDA=OFF / _VULKAN=OFF  no NVIDIA, no Vulkan Video on Adreno.
 #   -DSUNSHINE_ENABLE_KWIN=OFF / _PORTAL=OFF  neither exists under gamescope; capture is step 5.
 #   DRM (KMS capture), Wayland and X11 capture stay on: step 5 decides between them.
-#   no setcap in an install hook: KMS capture needs cap_sys_admin, which assemble-rootfs.sh grants
-#   and guard-rootfs.sh checks if step 5 keeps KMS. A capability set by pacman in the image chroot
-#   is not asserted to survive into the image.
+#   no setcap in an install hook: KMS capture needs cap_sys_admin, which novadeck-sunshine.service
+#   gives as an ambient capability. A file capability would set AT_SECURE, and libva would then
+#   ignore LIBVA_DRIVER_NAME; guard-rootfs.sh fails a release whose binary carries one.
 #
 # SUBMODULES are fetched in prepare() at the commits the release tag records (git checks each
 # against its gitlink), as upstream does, restricted to what a Linux build reads.

@@ -491,8 +491,15 @@ not a section of an existing panel. Two halves:
     - Panel over a game: every row reachable by gamepad, the game did not react. "Stop hosting?" is asked while a guest
       streams; Cancel keeps the stream going; confirming ends it (Moonlight: `terminated: 0`), and the service, ports,
       input devices and `/run` files are gone. The FIT left the Max's list, the tile stayed.
-    - Owed: Dismiss, wrong PIN, the Remove and Forget confirms, one registration after SIGKILL, a PC listing the FIT,
-      the setpriv prefix, tabs of both stores and Sunshine side by side.
+    - Remove and Forget ask first. A removed guest's tile is refused (Moonlight: "has not been paired. Please open
+      Moonlight to pair", which should name the plugin instead; open). Wrong PIN and Dismiss leave nothing behind, and
+      a join right after a Dismiss is not blocked. Dismiss reads "The host did not go through with the pairing".
+      Joining again after a Forget needs no PIN: neither side unpaired.
+    - Forgotten host stayed listed until the panel was reopened (the list went to the panel the dialog had replaced):
+      fixed in 0fdd261, HW-passed as a hot patch, the join half too. Hosting stayed off through that reboot.
+    - The panel searches when it opens (user), 9de144a, not on hardware.
+    - Owed: one registration after SIGKILL, a PC listing the FIT, the setpriv prefix, tabs of both stores and Sunshine
+      side by side, two guests, a game's fps while the panel searches.
 
 - **Duplicate tiles on the user's other devices (user, 2026-11-23; low priority, decide with this step).** Both test
   devices are signed in to the same Steam account, and Steam offers each one's shortcuts to the other for Remote

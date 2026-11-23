@@ -2,6 +2,7 @@ import { ButtonItem, ConfirmModal, Field, PanelSection, PanelSectionRow, ToggleF
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getState, setHosting } from "./backend";
 import { showGuestDialog } from "./GuestDialog";
+import { JoinSection } from "./JoinSection";
 import { showPinDialog } from "./PinDialog";
 import type { State } from "./types";
 
@@ -155,6 +156,8 @@ export function Content() {
           ))}
         </PanelSection>
       )}
+
+      <JoinSection />
     </>
   );
 }

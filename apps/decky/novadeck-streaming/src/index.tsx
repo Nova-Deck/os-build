@@ -1,7 +1,11 @@
 import { definePlugin } from "@decky/api";
 import { Content } from "./Content";
+import { applySunshineTab, refreshTab } from "./SunshineTab";
 
-export default definePlugin(() => ({
+export default definePlugin(() => {
+  const removeSunshineTab = applySunshineTab();
+  void refreshTab();
+  return {
   name: "NovaDeck Streaming",
   content: <Content />,
   // Two pads sharing one signal. The icon is the only thing telling the first-party plugins apart in
@@ -26,4 +30,8 @@ export default definePlugin(() => ({
   ),
   // NO alwaysRender: nothing here needs to outlive the panel. Sunshine is the record of who is
   // paired, and the panel reads it again each time it opens.
-}));
+  onDismount() {
+    removeSunshineTab();
+  },
+  };
+});

@@ -357,11 +357,22 @@ grep -A8 'const onToggle' "$SRC/Content.tsx" | grep -q 'streaming === 0' && grep
 # Steam parses only these; @decky/ui types it as any string, so tsc cannot catch "horizontal".
 check_flow=$(grep -ohE 'flow-children="[^"]*"' "$SRC"/*.tsx | sort -u | grep -vE '"(row|column)"')
 [[ -z $check_flow ]] && ok "every flow-children is one Steam parses" || bad "Steam ignores $check_flow"
-grep -q 'pending\.address' "$SRC/PinDialog.tsx" && ! grep -rqE '(pending|p)\.name' "$SRC" \
+grep -q 'pending\.address' "$SRC/PinDialog.tsx" && ! grep -qE '\b(pending|p)\.name' "$SRC/PinDialog.tsx" "$SRC/Content.tsx" \
     && ok "a guest who asks is identified by address, never by a name they send" || bad "a screen shows the name a guest sent"
 grep -q 'setInterval' "$SRC"/*.tsx && bad "polls can overlap (setInterval)" || ok "the next poll waits for the last one"
 grep -q 'menus included' "$SRC/Content.tsx" && grep -q 'menus included' "$SRC/PinDialog.tsx" \
     && ok "both screens say guests reach the menus" || bad "a screen no longer says guests reach the menus"
+TAB="$SRC/SunshineTab.tsx"
+grep -q 'tabs.some((t) => t.id === TAB_ID)' "$TAB" && grep -q 'if (apps.length === 0) return result' "$TAB" \
+    && ok "the Sunshine tab skips only itself, and is not there without a host" || bad "the Sunshine tab can hide other tabs, or show up empty"
+grep -q 'isTabMasterInstalled()' "$TAB" && ok "with TabMaster installed the tab list is left to it" || bad "the tab list is patched even when TabMaster owns it"
+grep -q 'const removeSunshineTab = applySunshineTab()' "$SRC/index.tsx" && grep -A3 'onDismount' "$SRC/index.tsx" | grep -q 'removeSunshineTab()' \
+    && ok "the tab patch is applied at load and removed at dismount" || bad "the tab patch is not removed at dismount"
+grep -q 'AddShortcut' "$SRC/tiles.ts" && ! grep -rq 'shortcuts\.vdf' "$PLUGIN/py_modules" "$PLUGIN/main.py" \
+    && ok "tiles go through Steam, never its file" || bad "something other than Steam's API makes tiles"
+grep -A4 'if (kept.problem)' "$SRC/tiles.ts" | grep -q 'RemoveShortcut' && ok "a tile that could not be recorded is taken away again" || bad "an unrecorded tile would stay for good"
+grep -A14 'return () => {' "$SRC/JoinDialog.tsx" | grep -q 'cancelJoin()' && ok "closing the dialog stops the pairing" || bad "a closed dialog leaves Moonlight waiting"
+grep -B3 -A9 'const forget = ' "$SRC/JoinSection.tsx" | grep -q 'ConfirmModal' && ok "forgetting a host asks first" || bad "forgetting a host does not ask first"
 for call in $(grep -ohE 'call<[^>]*>+\("[a-z_]+"' "$SRC/backend.ts" | sed -E 's/.*"([a-z_]+)"/\1/'); do
     grep -q "async def $call(" "$PLUGIN/main.py" && ok "the backend has $call" || bad "backend.ts calls $call, which main.py lacks"
 done

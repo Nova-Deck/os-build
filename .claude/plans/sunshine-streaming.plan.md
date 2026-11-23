@@ -468,7 +468,23 @@ not a section of an existing panel. Two halves:
     command runs as deck. Accepted: a host's id is not proven, so a copied one is listed beside it, by address.
     Proposed for the card, each needs a test: `ProtectKernelTunables`, `ProtectProc=invisible`, `RestrictNamespaces` on
     the unit. Left: `stream-host` asks for the app "Desktop", which another person's Sunshine may not have.
-  - **One card for patch 0003 and the plugin.** Next.
+  - **One card for patch 0003 and the plugin: 4a91e8c flashed on both, 2026-11-23, plugin frontends hot-patched to
+    4d29d2c.** Passed on it (FIT host, Max guest):
+    - **Crash found and fixed (4d29d2c).** React #310 on the Max's first boot: both library tabs called hooks inside
+      Decky's router, a boot race. After the fix the FIT loaded in the order that crashed (Stores, a render,
+      Streaming, a render) with no error, and its GOG tab fills. Epic, GOG and Sunshine side by side: not seen yet.
+    - Hosting on from the panel: Sunshine is the main process as deck, named "KONKR Pocket FIT"; the capability
+      survives `sunshine-start` (permitted in `drm_worker` alone); conf same as the image.
+    - The Max lists the FIT by itself under that name; PIN pairing from the two plugins; the host named the guest.
+      So the pinned API works in Decky's bundled Python (only that client sends the PIN and the name).
+    - Tile (`stream-host` + the host's id) and the Sunshine tab on the Max; the tile streams.
+    - **Patch 0003: sound on both, Moonlight's default settings.** Captured from the speaker's own monitor, default
+      sink never moved, no null sink.
+    - 7 min 22 s, 59.9 fps, 0.16% lost on the network (one burst of 32 frames), host 5.8 ms average, decode 1.0 ms.
+    - **Disconnect from the panel ends the stream** (Moonlight: `Connection terminated: -1`), the pad is gone, and the
+      guest is enabled again. Sunshine logs no line for it.
+    - Owed: Dismiss, wrong PIN, the confirms, the panel over a game, rejoin after a Disconnect, gone from the Max on
+      stop, one registration after SIGKILL, forget a host, a PC listing the FIT, the setpriv prefix.
 
 - **Duplicate tiles on the user's other devices (user, 2026-11-23; low priority, decide with this step).** Both test
   devices are signed in to the same Steam account, and Steam offers each one's shortcuts to the other for Remote

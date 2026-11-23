@@ -309,12 +309,33 @@ stream piped back to the host; nothing written on the card.
      `secure_getenv`, so the VA driver would not load. Ambient capabilities without file capabilities do
      not set it (`security/commoncap.c:1000-1006`, 7.3.5). Sunshine keeps `CAP_SYS_ADMIN` in its DRM worker
      thread only (`drmModeGetFB2`) and drops it everywhere else, so its children do not get it. deck is in
-     `video`, `render` and `input` (uinput/uhid). Untested.
+     `video`, `render` and `input` (uinput/uhid). **HW-passed 2026-11-23 (FIT, c639fc5, transient unit):**
+     both encoders found, `qcom_drv_video.so` mapped, `CAP_SYS_ADMIN` permitted in `drm_worker` alone, sound
+     on the Max, clean with Parking Garage Rally Circuit under Proton (user). `CAP_SYS_NICE` is not needed:
+     Sunshine warns, but its video thread submits only on ring 0 (540 in 3 s; the game only on ring 3, 371).
+     Host processing 3.1/8.7/4.0 ms on the Steam UI (root: 3.9/9.2/4.5), 3.5/8.3/4.7 and 3.1/8.8/5.0 ms
+     with the game; 0.00% dropped. The follow path ran (2 follows). The game's 1922x1080 buffer rebuilt
+     the encoder once, no blink (user).
   2. Root plus `PULSE_SERVER`: one variable, but a root service on the LAN.
 - **Audio: the host goes silent by default.** Unless the client asks for host audio, Sunshine moves the default
   sink to its own null sink for the stream (`src/audio.cpp:196`), and Moonlight does not ask by default. For
   playing together both sides must hear the game: step 7's tiles need `moonlight stream --audio-on-host`
   (`app/cli/commandlineparser.cpp:361`).
+
+- **The host setting, HW-passed 2026-11-23 (user):** Moonlight's "mute host" off gives sound on both sides
+  (Sunshine captures the speaker's monitor and leaves the default sink alone). With it on, the FIT is
+  silent and Sunshine puts the speaker back as the default sink on disconnect.
+- **Shipped as `novadeck-sunshine.service` (2026-11-23, not yet on hardware).** deck + ambient capability;
+  no `[Install]`, so it is off at every boot and only the step 7 plugin starts and stops it (user decision).
+  Web UI and API answer localhost only (`origin_web_ui_allowed = pc`, user decision): until a password is set,
+  anyone who reaches the web UI sets it. `/usr/lib/novadeck/sunshine-creds` sets a new one at every start and
+  fails the start if Sunshine did not save it; the plugin reads it from `/run/novadeck-sunshine/webui-password`.
+  Pairings stay in `~/.config/sunshine` (`/var` is per slot). App list: "Desktop" only. Pairing before the
+  plugin exists: an SSH tunnel to port 47990. Suspend while hosting: untested.
+  Reviewed 2026-11-23 (security + correctness, nothing critical or high). Known and accepted: Sunshine binds the
+  web UI on all interfaces and refuses non-local clients itself (403), so static assets and the locale answer
+  on the LAN, and denied requests grow the log on `/run` while hosting is on. Owed with the next package
+  change: the stale capability comment in `packages/sunshine/PKGBUILD`, and the tile comment in moonlight-qt's.
 
 ### 6. Input and several players (host)
 - Sunshine's virtual pads (uinput/uhid) must show up in Steam Input as extra controllers. Check player
@@ -324,6 +345,10 @@ stream piped back to the host; nothing written on the card.
 ### 7. Its own Decky plugin (user decision, 2026-11-20)
 A new plugin, `apps/decky/novadeck-<name>` (name TBD; the repo convention, beside `novadeck-stores`),
 not a section of an existing panel. Two halves:
+- **Host UI: native Steam UI drawn by the plugin, not Sunshine's web page in Steam's browser (user decision,
+  2026-11-23).** That page has a self-signed certificate, HTTP Basic auth and a mouse layout. The API has
+  what is needed: `GET`/`POST /api/pin` (pending pairings, PIN), `/api/clients/list`, `/api/clients/unpair`.
+  A localhost request with no `Origin`/`Referer` passes its CSRF check.
 - **Host:** start / stop Sunshine, **off by default**. Shows the state and connected players. Has a
   PIN field for pairing a new client: the backend posts it to Sunshine's local API, so the web UI is
   never needed on the device.
@@ -346,13 +371,14 @@ not a section of an existing panel. Two halves:
   user asked for it in the plan, to be tested later, not yet chosen). Sunshine's Linux
   publisher only talks to avahi-daemon (`publish.cpp` dlopens libavahi-client), and the image keeps
   avahi-daemon disabled: systemd-resolved owns UDP 5353 with mDNS on and answers `novadeck.local`. Steam
-  Remote Play is unaffected because Steam discovers over its own UDP 27036 broadcast. Plan: the plugin
-  writes `/etc/systemd/dnssd/sunshine.dnssd` (`Type=_nvstream._tcp`, `Port=47989`, `Name=%H`) and reloads
-  resolved when it starts Sunshine, and removes it when it stops it, so the advert follows the host
-  toggle. Alternative not recommended: enabling avahi-daemon (two responders on 5353; doing it right means turning resolved's
-  mDNS off and adding nss-mdns for `novadeck.local`, a system-wide change). Possible later: a Sunshine
+  Remote Play is unaffected because Steam discovers over its own UDP 27036 broadcast. Register over D-Bus
+  (`RegisterService`, `_nvstream._tcp`, 47989) as `novadeck-pairingd` does, with the withdrawal in the
+  service's `ExecStopPost`. NOT a `.dnssd` file plus a reload: after the file is removed resolved keeps
+  answering until it is restarted (measured, `novadeck-pairingd.service`). Alternative not recommended:
+  enabling avahi-daemon (two responders on 5353; doing it right means turning resolved's mDNS off and
+  adding nss-mdns for `novadeck.local`, a system-wide change). Possible later: a Sunshine
   patch registering through resolved's D-Bus `RegisterService`, so the advert follows Sunshine itself
-  (upstreamable). Test first: a `.dnssd` on a dev card, then the PC Moonlight lists the host unasked.
+  (upstreamable). Test first: register on a dev card, then the PC Moonlight lists the host unasked.
 - Security: Sunshine's web UI (47990) and stream ports LAN-only by default; credentials generated per
   device, never shipped. Internet play (port forwarding or Tailscale) is documented, not automated.
   Security review before merge (open ports, injected input, a root backend posting to a local API).

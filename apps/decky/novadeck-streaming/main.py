@@ -114,9 +114,7 @@ class Plugin:
         # One search at a time, and a second call gets the first one's answer.
         if self._search is None or self._search.done():
             self._search = asyncio.create_task(join.discover(_address()))
-        found = await asyncio.shield(self._search)
-        known = hosts.load(_hosts_file(), _account().pw_uid) or {}
-        return {"found": [{**host, "joined": host["uuid"] in known} for host in found]}
+        return {"found": await asyncio.shield(self._search)}
 
     async def start_join(self, address):
         """Start pairing with the host at an address: {"pin": ...} to type there, or {"problem": ...}."""

@@ -1,14 +1,14 @@
 import { DialogBody, DialogButton, DialogFooter, DialogHeader, Focusable, ModalRoot, TextField, showModal } from "@decky/ui";
 import { useEffect, useState } from "react";
 import { cancelJoin, joinStatus, startJoin } from "./backend";
+import { publishHosts } from "./hostList";
 import { ensureTile } from "./tiles";
-import type { Hosts } from "./types";
 
 const POLL_MS = 1000;
 
-type Props = { address: string; title: string; onHosts: (h: Hosts) => void; closeModal?: () => void };
+type Props = { address: string; title: string; closeModal?: () => void };
 
-function JoinDialog({ address, title, onHosts, closeModal }: Props) {
+function JoinDialog({ address, title, closeModal }: Props) {
   const [pin, setPin] = useState<string | null>(null);
   const [text, setText] = useState("Asking the host…");
   const [done, setDone] = useState(false);
@@ -32,7 +32,7 @@ function JoinDialog({ address, title, onHosts, closeModal }: Props) {
         } else if (status.state === "paired" && status.host) {
           paired = true;
           const hosts = await ensureTile(status.host);
-          onHosts(hosts);
+          publishHosts(hosts);
           finish(hosts.problem ?? `Paired. ${status.host.name || status.host.address} is in your library, under Sunshine.`);
         } else {
           finish(status.problem ?? "The pairing was stopped");
@@ -79,11 +79,11 @@ function JoinDialog({ address, title, onHosts, closeModal }: Props) {
   );
 }
 
-function AddressDialog({ onHosts, closeModal }: { onHosts: (h: Hosts) => void; closeModal?: () => void }) {
+function AddressDialog({ closeModal }: { closeModal?: () => void }) {
   const [address, setAddress] = useState("");
   const join = () => {
     closeModal?.();
-    showJoinDialog(address.trim(), address.trim(), onHosts);
+    showJoinDialog(address.trim(), address.trim());
   };
   return (
     <ModalRoot closeModal={closeModal} onCancel={closeModal}>
@@ -101,10 +101,10 @@ function AddressDialog({ onHosts, closeModal }: { onHosts: (h: Hosts) => void; c
   );
 }
 
-export function showJoinDialog(address: string, title: string, onHosts: (h: Hosts) => void) {
-  showModal(<JoinDialog address={address} title={title} onHosts={onHosts} />);
+export function showJoinDialog(address: string, title: string) {
+  showModal(<JoinDialog address={address} title={title} />);
 }
 
-export function showAddressDialog(onHosts: (h: Hosts) => void) {
-  showModal(<AddressDialog onHosts={onHosts} />);
+export function showAddressDialog() {
+  showModal(<AddressDialog />);
 }

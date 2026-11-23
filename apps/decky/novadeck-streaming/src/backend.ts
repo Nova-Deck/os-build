@@ -1,5 +1,5 @@
 import { call } from "@decky/api";
-import type { FoundHost, Hosts, JoinStart, JoinStatus, State } from "./types";
+import type { Host, Hosts, JoinStart, JoinStatus, State } from "./types";
 
 // Every mutating call returns the whole new state, with `problem` set when it did not happen.
 export const getState = () => call<[], State>("get_state");
@@ -11,7 +11,7 @@ export const allow = (uuid: string) => call<[string], State>("allow", uuid);
 export const remove = (uuid: string) => call<[string], State>("remove", uuid);
 
 export const getHosts = () => call<[], Hosts>("get_hosts");
-export const findHosts = () => call<[], { found: FoundHost[] }>("find_hosts");
+export const findHosts = () => call<[], { found: Host[] }>("find_hosts");
 export const startJoin = (address: string) => call<[string], JoinStart>("start_join", address);
 export const joinStatus = () => call<[], JoinStatus>("join_status");
 export const cancelJoin = () => call<[], null>("cancel_join");

@@ -1,32 +1,19 @@
 import { ButtonItem, ConfirmModal, Field, PanelSection, PanelSectionRow, showModal } from "@decky/ui";
-import { useEffect, useState } from "react";
-import { findHosts, getHosts } from "./backend";
+import { useState } from "react";
+import { findHosts } from "./backend";
+import { publishHosts, useHosts } from "./hostList";
 import { showAddressDialog, showJoinDialog } from "./JoinDialog";
 import { removeTile } from "./tiles";
-import type { FoundHost, Hosts, TileHost } from "./types";
+import type { Host, TileHost } from "./types";
 
 // Kept across remounts: the panel under a modal does not reliably stay mounted.
-let lastHosts: Hosts | null = null;
-let lastFound: FoundHost[] | null = null;
+let lastFound: Host[] | null = null;
 
 export function JoinSection() {
-  const [hosts, setHosts] = useState<Hosts | null>(lastHosts);
-  const [found, setFound] = useState<FoundHost[] | null>(lastFound);
+  const [found, setFound] = useState<Host[] | null>(lastFound);
   const [error, setError] = useState<string | null>(null);
   const [looking, setLooking] = useState(false);
-
-  const keep = (next: Hosts) => {
-    lastHosts = next;
-    setHosts(next);
-  };
-
-  useEffect(() => {
-    let live = true;
-    getHosts().then((h) => live && keep(h)).catch(() => live && setError("The plugin did not answer"));
-    return () => {
-      live = false;
-    };
-  }, []);
+  const hosts = useHosts(setError);
 
   const look = async () => {
     setLooking(true);
@@ -48,7 +35,7 @@ export function JoinSection() {
         strTitle={`Forget ${host.name}?`}
         strDescription="Its tile is removed from your library. The host still lists this device until its owner removes it."
         strOKButtonText="Forget"
-        onOK={() => void removeTile(host).then(keep).catch(() => {})}
+        onOK={() => void removeTile(host).then(publishHosts).catch(() => {})}
       />,
     );
 
@@ -61,7 +48,7 @@ export function JoinSection() {
         {found?.map((h) => (
           <PanelSectionRow key={`${h.uuid} ${h.address}`}>
             {/* Selectable even when we have it: its owner may have removed this device since. */}
-            <ButtonItem layout="below" description={h.joined ? `${h.address}, in your library` : h.address} onClick={() => showJoinDialog(h.address, h.name || h.address, keep)}>
+            <ButtonItem layout="below" description={hosts?.hosts.some((t) => t.uuid === h.uuid) ? `${h.address}, in your library` : h.address} onClick={() => showJoinDialog(h.address, h.name || h.address)}>
               {h.name || h.address}
             </ButtonItem>
           </PanelSectionRow>
@@ -70,7 +57,7 @@ export function JoinSection() {
           <PanelSectionRow><Field label="No host found" description="Hosting must be on there, on this network." /></PanelSectionRow>
         )}
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => showAddressDialog(keep)}>Enter an address</ButtonItem>
+          <ButtonItem layout="below" onClick={() => showAddressDialog()}>Enter an address</ButtonItem>
         </PanelSectionRow>
         {(error || hosts?.problem) && <PanelSectionRow><Field label={error ?? hosts?.problem} /></PanelSectionRow>}
       </PanelSection>

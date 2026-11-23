@@ -358,7 +358,7 @@ async def joining():
     check("then paired, with what the tile needs", (st["state"], st["host"]), ("paired", {"name": "FIT", "uuid": U2, "address": "192.168.1.217"}))
     check("the tile is remembered", (await pl.remember_tile(U2, "FIT", 77))["hosts"], [{"uuid": U2, "name": "FIT", "appid": 77}])
     check("the tab lists its appids", await pl.tab_members(), {"appids": [77]})
-    check("a found host we have is marked", [(h["name"], h["joined"]) for h in (await pl.find_hosts())["found"]], [("FIT", True), ("Max", False)])
+    check("a search says what was found, not what we have", [sorted(h) for h in (await pl.find_hosts())["found"]], [["address", "name", "uuid"]] * 2)
     check("forgotten", (await pl.forget_host(U2))["hosts"], [])
     open(P("cfg/main.json"), "w").write("{"); check("an unreadable registry is said, not shown as none", (bool((await pl.get_hosts())["problem"]), "error" in await pl.tab_members()), (True, True)); os.unlink(P("cfg/main.json"))
     async def wrong(address, pin): return "The PIN typed on the host was not this one"
@@ -405,6 +405,15 @@ grep -q 'pending\.address' "$SRC/PinDialog.tsx" && ! grep -qE '\b(pending|p)\.na
 grep -q 'setInterval' "$SRC"/*.tsx && bad "polls can overlap (setInterval)" || ok "the next poll waits for the last one"
 grep -q 'menus included' "$SRC/Content.tsx" && grep -q 'menus included' "$SRC/PinDialog.tsx" \
     && ok "both screens say guests reach the menus" || bad "a screen no longer says guests reach the menus"
+# The found list outlives a Forget and a join: what is in the library is read from the hosts shown below it.
+grep -q 'hosts?.hosts.some((t) => t.uuid === h.uuid)' "$SRC/JoinSection.tsx" && ! grep -rqE '\bjoined\b' "$SRC" \
+    && ok "a found host is marked from the hosts we have now" || bad "a found host keeps the mark it had when it was found"
+# Closing a dialog remounts the panel: HW, the new panel read the list while the Forget was being written, and
+# the answer to the Forget went to the old one.
+! grep -qE 'getHosts|useState<Hosts' "$SRC"/JoinSection.tsx "$SRC"/JoinDialog.tsx \
+    && grep -q 'removeTile(host).then(publishHosts)' "$SRC/JoinSection.tsx" && grep -q 'publishHosts(hosts)' "$SRC/JoinDialog.tsx" \
+    && ok "a Forget or a join reaches whichever panel is mounted" || bad "a Forget or a join can answer a panel that is gone"
+grep -q 'asked === changes && publishHosts' "$SRC/hostList.ts" && ok "a list asked for before a change does not undo it" || bad "an old list can replace a newer one"
 TAB="$SRC/SunshineTab.tsx"
 grep -q 'tabs.some((t) => t.id === TAB_ID)' "$TAB" && grep -q 'if (apps.length === 0) return result' "$TAB" \
     && ok "the Sunshine tab skips only itself, and is not there without a host" || bad "the Sunshine tab can hide other tabs, or show up empty"

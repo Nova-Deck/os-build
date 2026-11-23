@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Mon, 23 Nov 2026 22:55:14 +0100
+Subject: [PATCH] nvhttp: a client's quit ends its own stream, not everyone's
+
+cancel stopped every session and unplugged every client's gamepads, whoever
+asked: one guest leaving through Moonlight's Quit ended the game for all of
+them. It stops the asking client's session only, as disabling that client
+already does, and is the quit it was once no session is left.
+
+The client is the one whose certificate was verified for this connection,
+which is how launch and resume already tie a session to its client.
+---
+ src/nvhttp.cpp | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/nvhttp.cpp b/src/nvhttp.cpp
+index 8e33cad..05ab100 100644
+--- a/src/nvhttp.cpp
++++ b/src/nvhttp.cpp
+@@ -1558,6 +1558,13 @@ namespace nvhttp {
+     tree.put("root.cancel", 1);
+     tree.put("root.<xmlattr>.status_code", 200);
+ 
++    // Only this client's own stream and gamepads: others may still be playing.
++    rtsp_stream::terminate_sessions_by_cert(last_verified_client_cert);
++
++    if (rtsp_stream::session_count() > 0) {
++      return;
++    }
++
+     rtsp_stream::terminate_sessions();
+ 
+     if (proc::proc.running() > 0) {
+-- 
+2.56.1
+

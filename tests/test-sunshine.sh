@@ -75,6 +75,13 @@ check "the patch that reads that option is in the package" \
     "$(grep -lE '^\+.*"keep_host_audio"' "$ROOT"/packages/sunshine/patches/*.patch | wc -l)" 1
 check "the pin applies that patch" \
     "$(grep -c "^patches:.*$(basename "$(grep -lE '^\+.*"keep_host_audio"' "$ROOT"/packages/sunshine/patches/*.patch)")" "$ROOT/packages/sunshine/source.pin")" 1
+# Upstream, any guest's Quit ends every guest's stream.
+quit_patch="$(grep -lE '^\+.*terminate_sessions_by_cert\(last_verified_client_cert\)' "$ROOT"/packages/sunshine/patches/*.patch)"
+check "a guest's quit ends that guest's stream first" "$(grep -c . <<<"$quit_patch")" 1
+check "and everything only when no stream is left" "$(grep -cE '^\+.*session_count\(\) > 0' "$quit_patch")" 1
+check "the pin applies that patch too" "$(grep -c "^patches:.*$(basename "$quit_patch")" "$ROOT/packages/sunshine/source.pin")" 1
+check "every patch in the folder is in the pin" \
+    "$(for p in "$ROOT"/packages/sunshine/patches/*.patch; do grep -qE "^patches:.*$(basename "$p")( |$)" "$ROOT/packages/sunshine/source.pin" || basename "$p"; done)" ""
 check "log level leaves request headers out" "$(confkey min_log_level)" info
 check "credentials live in the runtime directory" \
     "$(confkey credentials_file)" "/run/$(unitkey RuntimeDirectory)/credentials.json"

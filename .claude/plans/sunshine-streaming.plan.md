@@ -486,8 +486,13 @@ not a section of an existing panel. Two halves:
     - Rejoin after a Disconnect: no PIN. Start+Select+L1+R1 on the guest closes the stream, straight back to Steam; the
       pad stays on the host, as for any close. **Kept that way (user):** the tile never uses `--quit-after`, which from
       the source ends the stream for every guest.
-    - Owed: Dismiss, wrong PIN, the confirms, the panel over a game, gone from the Max on
-      stop, one registration after SIGKILL, forget a host, a PC listing the FIT, the setpriv prefix.
+    - Disconnect with nobody streaming unplugs the pad of a guest who had left; they stay allowed. From the source, when
+      nobody streams it also closes Sunshine's app, so every other guest who stepped away loses their pad (two guests).
+    - Panel over a game: every row reachable by gamepad, the game did not react. "Stop hosting?" is asked while a guest
+      streams; Cancel keeps the stream going; confirming ends it (Moonlight: `terminated: 0`), and the service, ports,
+      input devices and `/run` files are gone. The FIT left the Max's list, the tile stayed.
+    - Owed: Dismiss, wrong PIN, the Remove and Forget confirms, one registration after SIGKILL, a PC listing the FIT,
+      the setpriv prefix, tabs of both stores and Sunshine side by side.
 
 - **Duplicate tiles on the user's other devices (user, 2026-11-23; low priority, decide with this step).** Both test
   devices are signed in to the same Steam account, and Steam offers each one's shortcuts to the other for Remote

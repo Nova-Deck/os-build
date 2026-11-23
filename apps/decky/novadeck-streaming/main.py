@@ -1,4 +1,4 @@
-"""novadeck-streaming: host this device's games for friends who join with Moonlight.
+"""novadeck-streaming: host this device's games for friends who join with Moonlight, and join theirs.
 
 It starts and stops novadeck-sunshine.service and is the whole of Sunshine's UI on the device: the
 web page is never shown. It is its own plugin because it holds the service's password and accepts
@@ -6,24 +6,32 @@ guests, who then control the device like a second controller, Steam's menus incl
 
 Every mutating call returns the whole new state with what happened, never an acknowledgement:
 Sunshine is the record of who is paired, and the panel shows what it says now.
+
+Joining runs Moonlight as the session user (user.py). A paired host becomes a Steam tile, made by the
+frontend, which is the only side that can ask Steam; this side keeps which tiles are ours (hosts.py).
 """
 import asyncio
 import os
-import pwd
 import socket
 
 import decky
 
-from novadeck_streaming import api, sessions, unit
+from novadeck_streaming import api, hosts, join, sessions, unit, user
 
-USER = "deck"
 PASSWORD_FILE = "/run/novadeck-sunshine/webui-password"
 
 
+_account = user.account
+
+
+def _hosts_file():
+    return user.config("stream-hosts.json")
+
+
 def _client():
-    user = pwd.getpwnam(USER)
-    return api.Client(user.pw_uid, PASSWORD_FILE,
-                      os.path.join(user.pw_dir, ".config", "sunshine", "credentials", "cacert.pem"))
+    account = _account()
+    return api.Client(account.pw_uid, PASSWORD_FILE,
+                      os.path.join(account.pw_dir, ".config", "sunshine", "credentials", "cacert.pem"))
 
 
 def _address():
@@ -89,3 +97,75 @@ class Plugin:
             decky.logger.info("sunshine not ready: %s", exc)
             return {**state, "streaming": streaming}
         return {**state, "ready": True, "streaming": streaming, "guests": guests, "pending": pending}
+
+    # -- joining
+
+    _join = None
+    _joined = None
+
+    async def get_hosts(self):
+        return self._hosts()
+
+    async def find_hosts(self):
+        known = hosts.load(_hosts_file(), _account().pw_uid) or {}
+        found = await join.discover(_address())
+        return {"found": [{**host, "joined": host["uuid"] in known} for host in found]}
+
+    async def start_join(self, address):
+        """Start pairing with the host at an address: {"pin": ...} to type there, or {"problem": ...}."""
+        address = join.valid_address(address)
+        if address is None:
+            return {"pin": None, "problem": "That is not an address on this network"}
+        if self._join and not self._join.done():
+            return {"pin": None, "problem": "Another host is being paired"}
+        host = await join.describe(address)
+        if host is None:
+            return {"pin": None, "problem": f"No host answers at {address}. Is it turned on there?"}
+        if self._join and not self._join.done():  # another press, while the host was being asked
+            return {"pin": None, "problem": "Another host is being paired"}
+        pin = join.new_pin()
+        self._joined = None
+        self._join = asyncio.create_task(self._run_join(host, pin))
+        return {"pin": pin, "problem": None, "host": host}
+
+    async def _run_join(self, host, pin):
+        try:
+            problem = await join.pair(host["address"], pin)
+        except OSError as exc:
+            decky.logger.warning("moonlight could not run: %s", exc)
+            problem = "Moonlight could not be started"
+        self._joined = {"state": "failed" if problem else "paired", "problem": problem, "host": host}
+
+    async def join_status(self):
+        if self._join and not self._join.done():
+            return {"state": "waiting", "problem": None, "host": None}
+        return self._joined or {"state": "idle", "problem": None, "host": None}
+
+    async def cancel_join(self):
+        if self._join and not self._join.done():
+            self._join.cancel()
+            await asyncio.wait({self._join})
+        self._join = self._joined = None
+
+    async def remember_tile(self, uuid, name, appid):
+        done = await hosts.remember(_hosts_file(), _account().pw_uid, uuid, name, appid)
+        return self._hosts(None if done else "This host's tile could not be saved")
+
+    async def forget_host(self, uuid):
+        done = await hosts.forget(_hosts_file(), _account().pw_uid, uuid)
+        return self._hosts(None if done else "This host could not be forgotten")
+
+    async def tab_members(self):
+        rows = hosts.load(_hosts_file(), _account().pw_uid)
+        if rows is None:
+            return {"error": "the list of hosts cannot be read"}
+        return {"appids": [row["appid"] for row in rows.values()]}
+
+    def _hosts(self, problem=None):
+        rows = hosts.load(_hosts_file(), _account().pw_uid)
+        if rows is None:
+            return {"hosts": [], "problem": "The list of hosts cannot be read"}
+        return {"hosts": [{"uuid": uuid, **row} for uuid, row in rows.items()], "problem": problem}
+
+    async def _unload(self):
+        await self.cancel_join()

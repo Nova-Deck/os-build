@@ -202,6 +202,77 @@ check("a process that is gone has none", sessions.count(8, P("proc")), 0)
 check("pid 0 is no process", sessions.count(0, P("proc")), 0)
 check("children never inherit PyInstaller's library path", [k for k in unit.clean_env({"LD_LIBRARY_PATH": "/x", "A": "1"}) if k == "LD_LIBRARY_PATH"], [])
 
+# -- joining: discovery
+from novadeck_streaming import join, hosts
+line = lambda *e: json.dumps({"browserServiceData": [{"updateFlag": f, "family": 2, "name": n, "type": "_nvstream._tcp", "domain": "local", "ifindex": 2} for f, n in e]})
+check("browsing keeps what is there at the end", join.parse_browse("\n".join([line(("added", "a"), ("added", "b")), line(("removed", "a")), "junk", "[]", ""])), ["b"])
+check("a name that is not an instance is dropped", join.parse_browse(line(("added", "x" * 64), ("added", "a\nb"), ("added", ""))), [])
+svc = lambda ip, port=47989: json.dumps({"type": "x", "data": [[[0, 0, port, "novadeck8.local", [[2, 2, ip]], "novadeck8.local"]], [], "n", "t", "local", 1]})
+check("a resolved service gives its address", join.parse_service(svc([192, 168, 1, 217])), "192.168.1.217")
+for label, text in (("loopback", svc([127, 0, 0, 1])), ("multicast", svc([224, 0, 0, 1])), ("unspecified", svc([0, 0, 0, 0])), ("link-local", svc([169, 254, 1, 1])),
+                    ("another port", svc([192, 168, 1, 2], 22)), ("a short address", svc([1, 2])), ("no JSON", "x"), ("no data", "{}")):
+    check(f"a service answering with {label} is dropped: the LAN decides what it says", join.parse_service(text), None)
+check("typed addresses are IPv4 and nothing else", [join.valid_address(a) for a in ("192.168.1.2", " 10.0.0.1 ", "127.0.0.1", "host", "1.2.3", "::1", "192.168.1.2; x", None, "-h")],
+      ["192.168.1.2", "10.0.0.1"] + [None] * 7)
+U2 = "92B19CB9-E03F-2E0B-0D97-0F1E37570B6B"
+xml = lambda name, uid=U2: f'<?xml version="1.0"?><root status_code="200"><hostname>{name}</hostname><uniqueid>{uid}</uniqueid></root>'
+check("a host says its name and id", join.parse_serverinfo(xml("KONKR Pocket FIT")), {"name": "KONKR Pocket FIT", "uuid": U2})
+check("entities are decoded, hidden characters dropped", join.parse_serverinfo(xml("A &amp; B‮"))["name"], "A & B")
+check("a bad id is no host", join.parse_serverinfo(xml("x", "../../etc")), None)
+check("no XML parser runs on what the LAN sends", join.parse_serverinfo('<!DOCTYPE r [<!ENTITY a "aaaa">]>' + xml("&a;"))["name"], "&a;")
+
+# -- joining: pairing, with a stub Moonlight
+def moonlight(pair, paired_after=1):
+    open(P("mcalls"), "w").close()
+    put("moonlight", (f"""#!/bin/bash
+echo "$QT_QPA_PLATFORM $*" >> {tmp}/mcalls
+if [ "$1" = list ]; then n=$(grep -c ' list ' {tmp}/mcalls); [ "$n" -gt {paired_after} ] && exit 0; exit 255; fi
+echo $$ > {tmp}/mpid
+{pair}
+exec sleep 60
+""").encode(), 0o700)
+async def pairing():
+    join.MOONLIGHT = P("moonlight"); join.as_user = lambda: []; join.GRACE = 0.1
+    alive = lambda: os.path.exists("/proc/" + open(P("mpid")).read().strip())
+    ok_ = 'echo \'00:00:00 - Qt Info: Executing request: "https://h:47984/pair?x"\' >&2'
+    moonlight(ok_); check("pairs", await join.pair("10.0.0.2", "1234"), None)
+    calls = open(P("mcalls")).read().split("\n")
+    check("asks first whether it is paired, then pairs, then asks again", [c.split()[1] for c in calls if c], ["list", "pair", "list"])
+    check("with the PIN and the address, and never on a screen", calls[1], "offscreen pair 10.0.0.2 --pin 1234")
+    check("every call is offscreen", {c.split()[0] for c in calls if c}, {"offscreen"})
+    check("Moonlight, which never exits by itself, is stopped", alive(), False)
+    moonlight(ok_, paired_after=0); check("a host already paired is paired", await join.pair("10.0.0.2", "1234"), None)
+    check("without asking for a PIN again", " pair " in open(P("mcalls")).read(), False)
+    moonlight(ok_, paired_after=9); check("believing the log is not enough", bool(await join.pair("10.0.0.2", "1234")))
+    moonlight("echo '00:00:01 - Qt Critical: Incorrect PIN' >&2"); check("a wrong PIN says so", "PIN" in (await join.pair("10.0.0.2", "1234") or ""))
+    check("and stops Moonlight too", alive(), False)
+    moonlight("exit 3"); check("a Moonlight that ends early is a failure", bool(await join.pair("10.0.0.2", "1234")))
+    moonlight("true"); join.PAIR_LIMIT, keep = 0.6, join.PAIR_LIMIT
+    check("a host that never answers times out", bool(await join.pair("10.0.0.2", "1234"))); join.PAIR_LIMIT = keep
+    check("and stops Moonlight", alive(), False)
+    moonlight("true"); t = asyncio.create_task(join.pair("10.0.0.2", "1234")); await asyncio.sleep(0.6); t.cancel(); await asyncio.wait({t}, timeout=5)
+    check("a cancelled pairing stops Moonlight", alive(), False)
+    moonlight("yes x | head -c 3000000; " + ok_); check("a lot of output does not stall it", await join.pair("10.0.0.2", "1234"), None)
+asyncio.run(pairing())
+check("PINs are four digits", all(len(p) == 4 and p.isdigit() for p in (join.new_pin() for _ in range(300))))
+
+# -- joining: the hosts we made tiles for
+H = P("cfg/hosts.json"); hosts.as_user = lambda: []
+async def registry():
+    check("no file is no hosts", hosts.load(H, me), {})
+    check("a host is remembered", await hosts.remember(H, me, U2, "FIT", 2930912870), True)
+    check("with its tile", hosts.load(H, me), {U2: {"name": "FIT", "appid": 2930912870}})
+    check("a signed appid is stored as Steam's file has it", (await hosts.remember(H, me, U2, "FIT", -1364054426), hosts.load(H, me)[U2]["appid"])[1], 2930912870)
+    check("a bad id is refused", await hosts.remember(H, me, "../x", "n", 1), False)
+    check("a bad appid is refused", await hosts.remember(H, me, U2, "n", "1"), False)
+    check("forgets", (await hosts.forget(H, me, U2), hosts.load(H, me))[1], {})
+    check("the file is private", oct(os.stat(H).st_mode & 0o777), "0o600")
+    os.symlink(H, P("cfg/link.json")); check("a registry that is a link is an error, never an empty list", hosts.load(P("cfg/link.json"), me), None)
+    open(H, "w").write("{broken"); check("a broken file is an error, never an empty list to overwrite", hosts.load(H, me), None)
+    check("and is not overwritten", (await hosts.remember(H, me, U2, "n", 1), open(H).read()), (False, "{broken"))
+    open(H, "w").write(json.dumps({U2: {"name": "x", "appid": 5}, "bad": {"appid": 1}, "y": 3})); check("rows that are not hosts are ignored", list(hosts.load(H, me)), [U2])
+asyncio.run(registry())
+
 # -- main.py: what the panel is told
 import types, logging
 sys.modules["decky"] = types.SimpleNamespace(logger=logging.getLogger("x")); logging.disable(logging.CRITICAL)
@@ -229,12 +300,49 @@ async def panel():
     async def nostart(): return False
     M.unit.start = nostart; check("a start that failed says so", (await pl.set_hosting(True))["problem"], "Hosting did not start")
 asyncio.run(panel())
+
+class FakeUser: pw_uid = me; pw_dir = tmp
+async def joining():
+    M._account = lambda: FakeUser; M._address = lambda: "192.168.1.9"; M._hosts_file = lambda: P("cfg/main.json"); pl = M.Plugin()
+    async def found(own): return [{"name": "FIT", "uuid": U2, "address": "192.168.1.217"}, {"name": "Max", "uuid": UUID, "address": "192.168.1.214"}] if own == "192.168.1.9" else []
+    M.join.discover = found
+    st = await pl.find_hosts()
+    check("finds hosts, without this device", [h["name"] for h in st["found"]], ["FIT", "Max"])
+    gate = asyncio.Event(); seen = []
+    async def pairs(address, pin): seen.append((address, pin)); await gate.wait(); return None
+    M.join.pair = pairs
+    async def info(address): return {"name": "FIT", "uuid": U2, "address": address}
+    M.join.describe = info
+    check("a bad address is refused before anything runs", bool((await pl.start_join("127.0.0.1"))["problem"]))
+    r = await pl.start_join("192.168.1.217"); await asyncio.sleep(0.05)
+    check("a join shows the PIN it uses", (r["problem"], seen), (None, [("192.168.1.217", r["pin"])]))
+    check("and is waiting", (await pl.join_status())["state"], "waiting")
+    check("a second join at once is refused", bool((await pl.start_join("192.168.1.214"))["problem"]))
+    gate.set(); await asyncio.sleep(0.05); st = await pl.join_status()
+    check("then paired, with what the tile needs", (st["state"], st["host"]), ("paired", {"name": "FIT", "uuid": U2, "address": "192.168.1.217"}))
+    check("the tile is remembered", (await pl.remember_tile(U2, "FIT", 77))["hosts"], [{"uuid": U2, "name": "FIT", "appid": 77}])
+    check("the tab lists its appids", await pl.tab_members(), {"appids": [77]})
+    check("a found host we have is marked", [(h["name"], h["joined"]) for h in (await pl.find_hosts())["found"]], [("FIT", True), ("Max", False)])
+    check("forgotten", (await pl.forget_host(U2))["hosts"], [])
+    open(P("cfg/main.json"), "w").write("{"); check("an unreadable registry is said, not shown as none", (bool((await pl.get_hosts())["problem"]), "error" in await pl.tab_members()), (True, True)); os.unlink(P("cfg/main.json"))
+    async def wrong(address, pin): return "The PIN typed on the host was not this one"
+    M.join.pair = wrong; await pl.start_join("192.168.1.217"); await asyncio.sleep(0.05)
+    check("a failed join says why", (await pl.join_status())["problem"], "The PIN typed on the host was not this one")
+    stopped = []
+    async def forever(address, pin):
+        try: await asyncio.sleep(60)
+        finally: stopped.append(1)
+    M.join.pair = forever; await pl.start_join("192.168.1.217"); await asyncio.sleep(0.05); await pl.cancel_join()
+    check("cancelling a join stops Moonlight", (stopped, (await pl.join_status())["state"]), ([1], "idle"))
+    await pl.start_join("192.168.1.217"); await asyncio.sleep(0.05); await pl._unload()
+    check("so does unloading the plugin", len(stopped), 2)
+asyncio.run(joining())
 PY
 ) || bad "the backend checks crashed"
 while IFS= read -r line; do
     case $line in "ok   "*) ok "${line#ok   }" ;; "FAIL "*) bad "${line#FAIL }" ;; ?*) echo "$line" ;; esac
 done <<<"$out"
-[[ $(grep -c '^ok ' <<<"$out") -ge 77 ]] || bad "fewer backend checks ran than expected"
+[[ $(grep -c '^ok ' <<<"$out") -ge 136 ]] || bad "fewer backend checks ran than expected"
 
 echo "the panel"
 SRC="$PLUGIN/src"
@@ -258,6 +366,18 @@ for call in $(grep -ohE 'call<[^>]*>+\("[a-z_]+"' "$SRC/backend.ts" | sed -E 's/
     grep -q "async def $call(" "$PLUGIN/main.py" && ok "the backend has $call" || bad "backend.ts calls $call, which main.py lacks"
 done
 
+echo "the tile's launcher"
+LAUNCH="$ROOT/rootfs/overlay/usr/lib/novadeck/stream-host"
+[[ -x $LAUNCH ]] && ok "it is executable" || bad "stream-host is missing or not executable"
+printf '#!/usr/bin/env bash\necho "$LIBVA_DRIVER_NAME $HAS_DESKTOP_ENVIRONMENT $*"\n' >"$TMP/mlaunch"; chmod +x "$TMP/mlaunch"
+U=92B19CB9-E03F-2E0B-0D97-0F1E37570B6B
+[[ $(env MOONLIGHT="$TMP/mlaunch" bash "$LAUNCH" "$U" 2>&1) == "qcom 0 stream $U Desktop" ]] \
+    && ok "streams the host by id, decoding on qcom, fullscreen" || bad "stream-host does not start the stream as expected"
+for arg in "" "--help" "x y" "$U extra" "../$U"; do
+    # shellcheck disable=SC2086  # "$U extra" is meant to be two arguments
+    env MOONLIGHT="$TMP/mlaunch" bash "$LAUNCH" $arg >/dev/null 2>&1 && bad "stream-host accepts '$arg'" || ok "refuses '$arg'"
+done
+
 echo "the image ships it"
 for f in Makefile rootfs/lib-assemble-decky-splash.sh rootfs/guard-rootfs.sh; do
     grep -qE '^(DECKY_PLUGINS|for (plugin_name|decky_plugin) ).*novadeck-streaming' "$ROOT/$f" \
@@ -267,7 +387,7 @@ done
     && ok "it runs as root, which starting the unit needs" || bad "plugin.json lacks the root flag"
 grep -rqE 'systemctl.{0,40}(enable|--now)|"enable"' "$PLUGIN/main.py" "$PLUGIN/py_modules" \
     && bad "something enables the unit: hosting must never start at boot" || ok "nothing enables the unit"
-grep -rqE '/home/deck|1000' "$PLUGIN/py_modules" --include=*.py \
+grep -rqE '/home/deck|\b1000\b' "$PLUGIN/py_modules" --include=*.py \
     && bad "a literal home or uid: take them from passwd" || ok "home and uid come from passwd"
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"

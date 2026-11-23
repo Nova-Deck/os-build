@@ -438,6 +438,12 @@ not a section of an existing panel. Two halves:
     is deck's, so it opens it `O_NOFOLLOW`, regular file, uid 1000, size-capped: a symlink to a root-only file would
     otherwise be sent to whatever listens on that port. `POST /api/pin` wants `pairing_id` (32 hex), `pin` (4 digits)
     and a 1-128 byte `name`. No API lists sessions, so "connected" is a count from the log, not a name per guest.
+    **Written 2026-11-23, not on hardware.** `tests/test-streaming.sh` drives the real client against a stub over TLS;
+    reviewed (code, security), nothing critical or high, fixes in. Pinning HW-passed on the FIT with the system's
+    Python (accepts `cacert.pem`, refuses another self-signed certificate); Decky's bundled Python owed. `POST
+    /api/pin` answers once the pairing finished (source), so "paired" is what happened. A block that times out is
+    followed by an allow. Accepted: software running as deck can reach Decky's backend and switch hosting on.
+    On hardware: the PIN dialog and the confirms by gamepad in the QAM, over a game too; Disconnect unplugs the pad.
   - **7b, advert.** D-Bus `RegisterService` with the withdrawal in the unit's `ExecStopPost`, as `novadeck-pairingd`.
   - **7c, join.** Discovery, `moonlight pair`, per-host tiles, the Sunshine tab. First check: `moonlight pair` opens a
     QML window (`CliPair.qml`) and needs a display, so it may have to run from a tile, or under `offscreen`.

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# sunshine-creds — set a new web UI password before novadeck-sunshine.service opens its port.
+#
+# Until Sunshine has credentials, whoever reaches its web UI first chooses them. So the service sets
+# its own at every start, and this fails the start when it cannot.
+#
+# The password lands in webui-password for the Decky plugin, whose backend pairs clients through
+# Sunshine's API. It lives in the service's private runtime directory and goes with it.
+set -euo pipefail
+
+SUNSHINE="${SUNSHINE:-/usr/bin/sunshine}"
+CONF=/etc/novadeck/sunshine.conf
+USERNAME=novadeck
+PASSWORD_BYTES=24
+
+dir="${RUNTIME_DIRECTORY:?not started by novadeck-sunshine.service}"
+umask 077
+
+# Hex: no character a shell, JSON or HTTP header treats specially.
+password="$(od -An -vtx1 -N"$PASSWORD_BYTES" /dev/urandom | tr -d ' \n')"
+rm -f "$dir/credentials.json"
+"$SUNSHINE" "$CONF" --creds "$USERNAME" "$password" >/dev/null
+
+# Sunshine exits 0 even when it could not write the file. The file is the only answer.
+grep -q "\"username\": *\"$USERNAME\"" "$dir/credentials.json" 2>/dev/null \
+  || { echo "sunshine-creds: Sunshine did not save the credentials; not starting without a password" >&2; exit 1; }
+
+printf '%s' "$password" >"$dir/webui-password"

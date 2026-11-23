@@ -324,7 +324,8 @@ BOOTSTRAP_PKGS=(base)
 # Steam, CEF, Remote Play and recording see no change. Plan: .claude/plans/sunshine-streaming.plan.md.
 #
 # sunshine: the Moonlight game-stream host (overlay-built, packages/sunshine/). Installed but not
-# started: its user unit is not enabled, and nothing sets LIBVA_DRIVER_NAME=qcom for it yet. It ships
+# started: hosting is the user's choice, through novadeck-sunshine.service, which nothing enables. Its
+# own user unit stays unused (a user manager cannot grant the capability KMS capture needs). It ships
 # a udev rule giving group `input` + uaccess on /dev/uinput and /dev/uhid, and loads uhid at boot.
 #
 # moonlight-qt: the Moonlight client (overlay-built, packages/moonlight-qt/). Its hardware decode needs

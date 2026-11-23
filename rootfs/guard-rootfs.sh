@@ -969,6 +969,20 @@ else
   bad "no /usr/bin/gamescope in the tree to check for cap_sys_nice"
 fi
 
+# Sunshine is the reverse: a capability that ARRIVES breaks it. A file capability sets AT_SECURE, libva
+# then ignores LIBVA_DRIVER_NAME, and it loses its hardware encoder with nothing reporting why. Its
+# capability is ambient, from novadeck-sunshine.service. And nothing may enable a sunshine unit, ours
+# or the package's: hosting is the user's choice, off at every boot.
+if [ -f "$STAGE/usr/bin/sunshine" ]; then
+  sun_cap="$(getcap "$STAGE/usr/bin/sunshine" 2>/dev/null || true)"
+  [ -z "$sun_cap" ] && echo "    ok  sunshine carries no file capability" \
+    || bad "sunshine carries a file capability — libva will ignore LIBVA_DRIVER_NAME (getcap: $sun_cap)"
+  sun_links="$(find "$STAGE/etc/systemd" "$STAGE/usr/lib/systemd" -type l \
+               \( -iname '*sunshine*' -o -ilname '*sunshine*' \) -printf '/%P ' 2>/dev/null || true)"
+  [ -z "$sun_links" ] && echo "    ok  no sunshine unit is enabled" \
+    || bad "a sunshine unit is enabled, and hosting must be off at boot: $sun_links"
+fi
+
 # ------------------------------------------------------------------------------------------
 # 12. Size delta (report only).
 #

@@ -238,5 +238,45 @@ else
   bad "a \`u!\` pin was not read as a pin by assertion 8: $out"
 fi
 
+# --- sunshine: no file capability, and nothing enables it -------------------------------------
+# getcap is stubbed: setting a real capability needs root. STUB_CAP is what it reports for sunshine.
+mkdir -p "$TMP/stubbin"
+cat >"$TMP/stubbin/getcap" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in */sunshine) [[ -z ${STUB_CAP:-} ]] || echo "$1 $STUB_CAP" ;; esac
+STUB
+chmod +x "$TMP/stubbin/getcap"
+guard_sun() { PATH="$TMP/stubbin:$PATH" bash "$GUARD" "$1" 2>&1; }
+
+stage="$TMP/sun-clean"; mkstage "$stage"; : >"$stage/usr/bin/sunshine"
+install -d "$stage/etc/systemd/system" "$stage/usr/lib/systemd/system"
+: >"$stage/usr/lib/systemd/system/novadeck-sunshine.service"
+out="$(guard_sun "$stage")"
+if grep -q 'ok  sunshine carries no file capability' <<<"$out" && grep -q 'ok  no sunshine unit is enabled' <<<"$out"; then
+  ok "a sunshine with no capability and no enabling link passes"
+else
+  bad "a clean sunshine was reported: $(grep -i sunshine <<<"$out")"
+fi
+
+out="$(STUB_CAP=cap_sys_admin=ep guard_sun "$stage")"
+if grep -q 'sunshine carries a file capability' <<<"$out"; then
+  ok "a file capability on sunshine fails"
+else
+  bad "a file capability on sunshine passed"
+fi
+
+for unit in novadeck-sunshine.service app-dev.lizardbyte.app.Sunshine.service; do
+  for wants in etc/systemd/system/multi-user.target.wants etc/systemd/user/graphical-session.target.wants; do
+    stage="$TMP/sun-on-${unit%%-*}-${wants//\//_}"; mkstage "$stage"; : >"$stage/usr/bin/sunshine"
+    install -d "$stage/$wants"; ln -s "/usr/lib/systemd/x/$unit" "$stage/$wants/$unit"
+    out="$(guard_sun "$stage")"
+    if grep -q 'a sunshine unit is enabled' <<<"$out"; then
+      ok "an enabled $unit in $(basename "$wants") fails"
+    else
+      bad "an enabled $unit in $wants passed"
+    fi
+  done
+done
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

@@ -1,0 +1,52 @@
+[Unit]
+Description=novadeck game-stream host (Sunshine, for Moonlight clients)
+# deck's user manager owns the pulse socket the game audio is captured from. Ordering only: with no
+# session there is no picture either, and Sunshine says so itself.
+After=user@1000.service network.target
+
+[Service]
+Type=simple
+
+# deck, not root: this listens on the LAN. It also has to be deck to find the session's audio, which
+# is why this is not a root service with PULSE_SERVER set. A USER unit is not an option either: the
+# user manager cannot grant the capability below.
+User=deck
+
+# Reading another process's framebuffer (drmModeGetFB2) needs CAP_SYS_ADMIN. Sunshine keeps it in its
+# DRM worker thread and drops it everywhere else, children included.
+#
+# AMBIENT, NOT setcap ON THE BINARY. A file capability puts the process in secure-execution mode
+# (AT_SECURE), where libva reads LIBVA_DRIVER_NAME with secure_getenv and gets nothing: no VA driver,
+# no hardware encoder. An ambient capability without a file capability does not set AT_SECURE.
+#
+# No CAP_SYS_NICE. Sunshine warns that it is missing, but its capture still submits on the GPU's
+# highest-priority ring without it (measured, SM8650).
+AmbientCapabilities=CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_SYS_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=full
+
+# The VA-API driver over iris is only loaded by a client that names it (packages/qcom-va-driver).
+Environment=LIBVA_DRIVER_NAME=qcom
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+
+# Pairings and the host's identity go to ~/.config/sunshine, on /home: /var is per slot, so an update
+# would forget every paired client. Private, because they include a key.
+UMask=0077
+# The web UI password (new at every start) and the log. Gone when the service stops, kept across an
+# automatic restart so a crash leaves its log.
+RuntimeDirectory=novadeck-sunshine
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=restart
+
+# Fails the start when it cannot set a password, so the port never opens without one.
+ExecStartPre=/usr/lib/novadeck/sunshine-creds
+ExecStart=/usr/bin/sunshine /etc/novadeck/sunshine.conf
+
+# A crash while the user has hosting on should not end it. A clean stop is not a failure.
+Restart=on-failure
+RestartSec=2
+
+# Deliberately NO [Install] section: hosting is the user's choice, off at every boot, and the switch
+# for it is a Decky plugin. Nothing in the image may enable this unit: tests/test-sunshine.sh asserts
+# that on the source, rootfs/guard-rootfs.sh on the built tree.

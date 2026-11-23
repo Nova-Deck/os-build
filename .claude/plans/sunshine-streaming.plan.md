@@ -458,9 +458,18 @@ not a section of an existing panel. Two halves:
     `QT_QPA_PLATFORM=offscreen moonlight pair <host> --pin NNNN` as deck, no window, no exit of its own (success and
     failure both end in a dialog), so watch and stop it. Right PIN: `True` in 0.1 s, the host's uuid and `srvcert`
     are in `Moonlight.conf`. Wrong PIN: Moonlight logs `Incorrect PIN`; Sunshine answers `False` only after 10 s.
-    Without `offscreen` it drives the screen through DRM (refused): never run it bare. It sends Wake-on-LAN to every
-    host it knows at start, and refuses a host it is already paired with. Discovery must not use it.
-  - **7d, security review**, then the HW test together with the `keep_host_audio` patch (step 5's unit on a new card).
+    Without `offscreen` it drives the screen through DRM (refused): never run it bare. It sends Wake-on-LAN to the
+    host it is asked for, and refuses one it is already paired with.
+    **Written 2026-11-23, not run in Steam's UI.** Browse and resolve HW-checked as deck (Max found the FIT's advert,
+    gone after the withdrawal, same hostname on both). Both library-tab patches reviewed in either load order.
+    A pairing left open blocks that device on the host for five minutes (Sunshine 409): the PIN dialog has Dismiss.
+  - **7d, reviewed twice 2026-11-23** (security, code): no way to root or to loopback; one HIGH (a refused pairing waited
+    three minutes and blamed the host) and the rest fixed. LAN names no longer reach a root process: every discovery
+    command runs as deck. Accepted: a host's id is not proven, so a copied one is listed beside it, by address.
+    Proposed for the card, each needs a test: `ProtectKernelTunables`, `ProtectProc=invisible`, `RestrictNamespaces` on
+    the unit. Left: `stream-host` asks for the app "Desktop", which another person's Sunshine may not have.
+  - **One card for patch 0003 and the plugin.** Next.
+
 - **Duplicate tiles on the user's other devices (user, 2026-11-23; low priority, decide with this step).** Both test
   devices are signed in to the same Steam account, and Steam offers each one's shortcuts to the other for Remote
   Play, so the Max and the FIT each list two Moonlight and two Google Play Store cards. A host and a guest normally

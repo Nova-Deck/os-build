@@ -505,8 +505,14 @@ not a section of an existing panel. Two halves:
     - A PC lists the FIT by itself and joins beside the Max (two HEVC encodes); closing its stream window leaves the
       Max's stream alone. **Quit from the PC ends the Max's stream (HW), so the tile never sends one.** Any guest's
       Moonlight can, from its app list: a host cannot stop it short of removing that guest.
-    - Owed: the setpriv prefix, tabs of both stores and Sunshine side by side, a rejoin order with two pads, the game's
-      fps while hosting.
+    - PGRC holds 60 fps on the FIT while it streams to the Max (user); no figure without hosting to compare.
+  - **Next card: 8114558, built and its image checked 2026-11-23, NOT flashed.** It has the plugin fixes above, Sunshine
+    0004 (7a83934: one guest's Quit ends that guest's stream only, user's yes) and Moonlight 0001 (8114558: a refused
+    tile says "Please join it in NovaDeck Streaming first."). Devices run 4a91e8c with the plugin hot-patched.
+    Test: Quit from the PC with the Max streaming (the Max carries on); Quit by the only guest, then rejoin; Quit from
+    the PC's app list while only the Max streams; the refused tile's message.
+    - Owed: the setpriv prefix, tabs of both stores and Sunshine side by side, a rejoin order with two pads, fps with
+      and without hosting in a game that does not hold 60, 0004's two-guest limit (same-instant connections).
 
 - **Duplicate tiles on the user's other devices (user, 2026-11-23; low priority, decide with this step).** Both test
   devices are signed in to the same Steam account, and Steam offers each one's shortcuts to the other for Remote

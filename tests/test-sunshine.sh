@@ -120,5 +120,47 @@ check "refuses to start when the credentials were not written" "$([[ $rc -ne 0 ]
 env -u RUNTIME_DIRECTORY SUNSHINE="$TMP/bin/sunshine" STUB_ARGS="$TMP/args" bash "$CREDS" >/dev/null 2>&1; rc=$?
 check "refuses to start without a runtime directory" "$([[ $rc -ne 0 ]] && echo refused)" refused
 
+echo "6. the mDNS advert"
+ADVERT="$OVL/usr/lib/novadeck/sunshine-advert"
+[[ -x $ADVERT ]] && ok "the helper is executable" || bad "the helper is missing or not executable"
+# '+': registering wants root (polkit), and the service is deck. '-': an advert is a convenience, and
+# must never decide whether hosting starts or stops.
+check "the unit publishes once Sunshine runs, as root, and never fails over it" "$(unitkey ExecStartPost)" "-+/usr/lib/novadeck/sunshine-advert start"
+check "and withdraws however Sunshine ends" "$(unitkey ExecStopPost)" "-+/usr/lib/novadeck/sunshine-advert stop"
+check "the responder is systemd-resolved" "$(unitkey Wants)" systemd-resolved.service
+cat >"$TMP/bin/busctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$BUS_LOG"
+[[ $* == *UnregisterService* && ${STUB_NONE:-} ]] && exit 1
+[[ $* == *" RegisterService "* && ${STUB_REFUSE:-} ]] && exit 1
+exit 0
+STUB
+printf '#!/usr/bin/env bash\necho 0123456789abcdef0123456789abcdef\n' >"$TMP/bin/systemd-id128"
+# Sunshine's port, as ss reports it: up, or not there.
+printf '#!/usr/bin/env bash\n[[ ${STUB_PORT:-up} == up ]] && echo "LISTEN 0 4096 0.0.0.0:47989 0.0.0.0:*"\nexit 0\n' >"$TMP/bin/ss"
+chmod +x "$TMP"/bin/*
+advert() {  # advert <verb> [VAR=value...]
+    : >"$TMP/bus"; local verb="$1"; shift
+    env PATH="$TMP/bin:$PATH" BUS_LOG="$TMP/bus" ADVERT_WAIT=1 "$@" bash "$ADVERT" "$verb" >"$TMP/out" 2>&1
+}
+OBJ=/org/freedesktop/resolve1/dnssd/novadeck_2dsunshine
+advert start; check "start succeeds" "$?" 0
+check "a registration left by a crash is cleared first" "$(sed -n 1p "$TMP/bus" | grep -c "UnregisterService o $OBJ\$")" 1
+check "then Moonlight's service type and Sunshine's port are registered" \
+    "$(sed -n 2p "$TMP/bus" | grep -cE ' RegisterService sssqqqaa\{say\} novadeck-sunshine [^ ]+ _nvstream\._tcp 47989 0 0 0$')" 1
+NAME=$(sed -n 2p "$TMP/bus" | sed -E 's/.* novadeck-sunshine ([^ ]+) .*/\1/')
+check "every device is called novadeck, so the instance is not just the hostname" "$([[ $NAME =~ ^novadeck-[0-9a-f]{8}$ ]] && echo unique)" unique
+check "the machine id itself is not what is published" "$(grep -c -- '--app-specific=\|-a ' "$ADVERT")" 1
+advert start STUB_NONE=1; check "nothing to clear is normal" "$? $(grep -c ' RegisterService ' "$TMP/bus")" "0 1"
+advert start STUB_PORT=down; check "a port that never opens is not advertised" "$? $(grep -c ' RegisterService ' "$TMP/bus")" "0 0"
+check "and the log says so" "$(grep -c 'not advertising' "$TMP/out")" 1
+advert start STUB_REFUSE=1; check "a refused registration does not fail the start" "$?" 0
+check "and the log says that too" "$(grep -c 'could not advertise' "$TMP/out")" 1
+advert stop; check "stop withdraws the one registration" "$? $(cat "$TMP/bus" | grep -c "UnregisterService o $OBJ\$") $(wc -l <"$TMP/bus")" "0 1 1"
+advert bogus; check "any other verb is refused" "$([[ $? -ne 0 ]] && echo refused)" refused
+check "nothing writes a .dnssd file" "$(grep -rlE '[^ ]+\.dnssd' "$ADVERT" "$UNIT" | wc -l)" 0
+# The object path is the escaped id: rename one and the advert outlives the service.
+check "the path withdrawn is the id registered" "$(python3 -c 'print("novadeck-sunshine".replace("-","_2d"))')" "${OBJ##*/}"
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

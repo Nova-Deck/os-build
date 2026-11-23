@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# sunshine-advert — announce the game-stream host over mDNS while novadeck-sunshine.service runs, so
+# Moonlight lists it without an address being typed.
+#
+#   sunshine-advert start|stop      (ExecStartPost / ExecStopPost, as root: registering wants it)
+#
+# THROUGH systemd-resolved, the mDNS responder this image has. Sunshine itself only talks to avahi,
+# which does not run here: a second responder on the port is unreliable.
+#
+# THE UNIT WITHDRAWS IT, because resolved does not: the registration outlives whoever made it, and a
+# .dnssd file removed needs a resolved restart to go away (both measured, novadeck-pairingd.service).
+# systemd also skips ExecStopPost when it restarts a crashed service, so start clears first.
+#
+# A convenience: no failure here may decide whether hosting starts or stops.
+set -uo pipefail
+
+# resolved escapes the id into the object path ('-' is _2d). Change one and you must change the other,
+# or the advert outlives the service.
+ID=novadeck-sunshine
+OBJECT=/org/freedesktop/resolve1/dnssd/novadeck_2dsunshine
+TYPE=_nvstream._tcp
+PORT=47989
+# Salts the machine id below. Any fixed value; changing it renames every host.
+APP=5b0d3a6c2f4e4f0f9d0d6b1f0a5c7e31
+WAIT="${ADVERT_WAIT:-10}"
+
+log() { echo "sunshine-advert: $*" >&2; }
+resolved() {
+    busctl --timeout=5 call org.freedesktop.resolve1 /org/freedesktop/resolve1 \
+        org.freedesktop.resolve1.Manager "$@"
+}
+withdraw() { resolved UnregisterService o "$OBJECT" >/dev/null 2>&1; }
+listening() { [[ -n "$(ss -Hltn "sport = :$PORT" 2>/dev/null)" ]]; }
+
+start() {
+    withdraw
+    # systemd runs this as soon as Sunshine is started, about a second before its port opens.
+    local until=$((SECONDS + WAIT))
+    until listening; do
+        ((SECONDS < until)) || { log "port $PORT did not open, not advertising"; return 0; }
+        sleep 0.2
+    done
+    # Not the hostname: every novadeck has the same one, and two hosts on a network would collide. Not
+    # the machine id either, which is private: a digest of it.
+    local id name
+    id="$(systemd-id128 machine-id --app-specific="$APP")" || { log "no machine id, not advertising"; return 0; }
+    name="novadeck-${id:0:8}"
+    # Priority, weight, and no TXT records.
+    if resolved RegisterService 'sssqqqaa{say}' "$ID" "$name" "$TYPE" "$PORT" 0 0 0 >/dev/null; then
+        log "advertising $TYPE on :$PORT as $name"
+    else
+        log "could not advertise, add this device by address"
+    fi
+}
+
+case "${1:-}" in
+    start) start ;;
+    stop) withdraw; exit 0 ;;
+    *) echo "usage: sunshine-advert start|stop" >&2; exit 2 ;;
+esac

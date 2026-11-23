@@ -3,6 +3,9 @@ Description=novadeck game-stream host (Sunshine, for Moonlight clients)
 # deck's user manager owns the pulse socket the game audio is captured from. Ordering only: with no
 # session there is no picture either, and Sunshine says so itself.
 After=user@1000.service network.target
+# Publishes the advert below. Soft: without it guests add this device by address.
+Wants=systemd-resolved.service
+After=systemd-resolved.service
 
 [Service]
 Type=simple
@@ -42,6 +45,13 @@ RuntimeDirectoryPreserve=restart
 # Fails the start when it cannot set a password, so the port never opens without one.
 ExecStartPre=/usr/lib/novadeck/sunshine-creds
 ExecStart=/usr/bin/sunshine /etc/novadeck/sunshine.conf
+
+# The mDNS advert, up once the port is and gone with the service. '+' because registering a service
+# with resolved wants root, which only these two commands get; '-' because it must never decide
+# whether hosting starts or stops. ExecStopPost runs however Sunshine ends, except when systemd
+# restarts it after a crash: the next start then clears the old advert itself.
+ExecStartPost=-+/usr/lib/novadeck/sunshine-advert start
+ExecStopPost=-+/usr/lib/novadeck/sunshine-advert stop
 
 # A crash while the user has hosting on should not end it. A clean stop is not a failure.
 Restart=on-failure

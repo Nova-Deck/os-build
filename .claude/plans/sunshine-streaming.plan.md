@@ -338,8 +338,23 @@ stream piped back to the host; nothing written on the card.
   change: the stale capability comment in `packages/sunshine/PKGBUILD`, and the tile comment in moonlight-qt's.
 
 ### 6. Input and several players (host)
-- Sunshine's virtual pads (uinput/uhid) must show up in Steam Input as extra controllers. Check player
-  numbering.
+- **The guest must be player 2 (user, 2026-11-23: missing from this plan).** Sunshine allocates one virtual pad
+  per client controller from one host-wide mask (`src/input.cpp:1283-1305`, 63d35f7), an Xbox Series pad by
+  default, so each guest is a separate device. InputPlumber should leave them alone: our Pocket Max config
+  matches its own pad by name. Nothing below is tested yet.
+  - **Order.** Steam presumably numbers pads by connection. Proposed: the step 7 plugin orders them, host first,
+    then guests as they joined, with `SteamClient.Input.RegisterForControllerListChanges` (`nXInputIndex` per
+    pad) and `SwapControllerOrder` (names from `@decky/ui`'s types; behaviour unverified).
+  - **The guest's pad drives the host's Steam UI** (seen 2026-11-22: the Max's D-pad moved the FIT's UI), so
+    Guide probably opens its menu. This Sunshine has no per-client permission that I found.
+  - **Keyboard and mouse are on for every client by default**; `keyboard`/`mouse = disabled` would stop a guest
+    typing on the host, and rule out mouse games. User decision, open.
+  - **One guest as two pads** if Moonlight sees both the raw pad and Steam's virtual one. Then
+    `--no-multi-controller` on the tile.
+  - **Joining after the game started:** some games look for pads only at launch.
+  - **Steam Input off on an Epic/GOG tile:** the game sees raw pads in kernel order; Steam's order does nothing.
+  - Test on card ed20049: pads added and their order with no game; a local two-player game; Guide and D-pad in
+    game; leave and rejoin mid-game.
 - Sunshine `channels` > 1: one iris encode session per client. Measure 2 clients on SM8250.
 
 ### 7. Its own Decky plugin (user decision, 2026-11-20)

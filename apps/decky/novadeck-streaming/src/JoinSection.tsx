@@ -1,5 +1,5 @@
 import { ButtonItem, ConfirmModal, Field, PanelSection, PanelSectionRow, showModal } from "@decky/ui";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { findHosts } from "./backend";
 import { publishHosts, useHosts } from "./hostList";
 import { showAddressDialog, showJoinDialog } from "./JoinDialog";
@@ -27,6 +27,12 @@ export function JoinSection() {
     }
     setLooking(false);
   };
+
+  // Once per opening, so a host shows up without being asked for. A dialog that closes is an opening
+  // too, so this also runs after a Forget. The backend lets one search run at a time.
+  useEffect(() => {
+    void look();
+  }, []);
 
   // Not a row's own action: the QAM is open over a running game, the stream itself included.
   const forget = (host: TileHost) =>

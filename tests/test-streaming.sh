@@ -414,6 +414,10 @@ grep -q 'hosts?.hosts.some((t) => t.uuid === h.uuid)' "$SRC/JoinSection.tsx" && 
     && grep -q 'removeTile(host).then(publishHosts)' "$SRC/JoinSection.tsx" && grep -q 'publishHosts(hosts)' "$SRC/JoinDialog.tsx" \
     && ok "a Forget or a join reaches whichever panel is mounted" || bad "a Forget or a join can answer a panel that is gone"
 grep -q 'asked === changes && publishHosts' "$SRC/hostList.ts" && ok "a list asked for before a change does not undo it" || bad "an old list can replace a newer one"
+# Hosts are found when the panel opens, with one search and no timer: nothing runs while it is closed.
+grep -A3 'useEffect(() => {' "$SRC/JoinSection.tsx" | grep -q 'void look()' && ! grep -qE 'setInterval|setTimeout' "$SRC/JoinSection.tsx" \
+    && grep -q '"Find hosts"' "$SRC/JoinSection.tsx" \
+    && ok "the panel searches once when it opens, and on request" || bad "hosts only show up when the user asks, or the panel searches on a timer"
 TAB="$SRC/SunshineTab.tsx"
 grep -q 'tabs.some((t) => t.id === TAB_ID)' "$TAB" && grep -q 'if (apps.length === 0) return result' "$TAB" \
     && ok "the Sunshine tab skips only itself, and is not there without a host" || bad "the Sunshine tab can hide other tabs, or show up empty"

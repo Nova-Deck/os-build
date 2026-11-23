@@ -502,8 +502,11 @@ not a section of an existing panel. Two halves:
     - The order that crashed the Max (Stores, a render, Streaming, a render) ran on the Max and the FIT without error.
     - SIGKILL while hosting, nobody streaming: running again 2.5 s later, one advert, guests kept, new password; a stop
       then withdraws it.
-    - Owed: a PC listing the FIT, the setpriv prefix, tabs of both stores and Sunshine side by side, two guests, the
-      game's fps while hosting.
+    - A PC lists the FIT by itself and joins beside the Max (two HEVC encodes); closing its stream window leaves the
+      Max's stream alone. **Quit from the PC ends the Max's stream (HW), so the tile never sends one.** Any guest's
+      Moonlight can, from its app list: a host cannot stop it short of removing that guest.
+    - Owed: the setpriv prefix, tabs of both stores and Sunshine side by side, a rejoin order with two pads, the game's
+      fps while hosting.
 
 - **Duplicate tiles on the user's other devices (user, 2026-11-23; low priority, decide with this step).** Both test
   devices are signed in to the same Steam account, and Steam offers each one's shortcuts to the other for Remote

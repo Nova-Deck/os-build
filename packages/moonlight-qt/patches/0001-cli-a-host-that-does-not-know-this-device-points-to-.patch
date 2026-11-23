@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Mon, 23 Nov 2026 22:55:14 +0100
+Subject: [PATCH] cli: a host that does not know this device points to NovaDeck
+ Streaming
+
+The stream command is what a paired host's tile runs. Its message sent the
+user to Moonlight's own window, but pairing is the plugin's.
+---
+ app/cli/startstream.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/app/cli/startstream.cpp b/app/cli/startstream.cpp
+index 5f79b55..c25be50 100644
+--- a/app/cli/startstream.cpp
++++ b/app/cli/startstream.cpp
+@@ -87,7 +87,7 @@ public:
+                 } else {
+                     m_State = StateFailure;
+                     QString msg = QObject::tr("Computer %1 has not been paired. "
+-                                              "Please open Moonlight to pair before streaming.")
++                                              "Please join it in NovaDeck Streaming first.")
+                             .arg(event.computer->name);
+                     emit q->failed(msg);
+                 }
+-- 
+2.56.1
+

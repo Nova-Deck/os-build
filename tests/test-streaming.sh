@@ -454,6 +454,11 @@ for arg in "" "--help" "x y" "$U extra" "../$U"; do
     env MOONLIGHT="$TMP/mlaunch" bash "$LAUNCH" $arg >/dev/null 2>&1 && bad "stream-host accepts '$arg'" || ok "refuses '$arg'"
 done
 
+# The tile's one message about pairing is Moonlight's, and upstream sends the user to Moonlight's own window.
+MOON="$ROOT/packages/moonlight-qt"
+grep -q '^+.*in NovaDeck Streaming first' "$MOON"/patches/0001-*.patch && grep -q "^patches:.*$(cd "$MOON/patches" && ls 0001-*.patch)" "$MOON/source.pin" \
+    && ok "a host that does not know this device points to the plugin" || bad "the refused tile sends the user to Moonlight"
+
 echo "the image ships it"
 for f in Makefile rootfs/lib-assemble-decky-splash.sh rootfs/guard-rootfs.sh; do
     grep -qE '^(DECKY_PLUGINS|for (plugin_name|decky_plugin) ).*novadeck-streaming' "$ROOT/$f" \

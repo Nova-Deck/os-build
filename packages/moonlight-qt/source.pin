@@ -1,5 +1,10 @@
 # moonlight-qt — local PKGBUILD (packages/moonlight-qt/PKGBUILD), built from the v6.2.0 release
 # source tarball. Not in holo or Arch. See the PKGBUILD header for what differs from the AUR recipe.
+#
+# Patches:
+#   0001  The stream command's message for a host that does not know this device names NovaDeck
+#         Streaming, where pairing is done, instead of Moonlight's own window.
 name: moonlight-qt
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
+patches: 0001-cli-a-host-that-does-not-know-this-device-points-to-.patch

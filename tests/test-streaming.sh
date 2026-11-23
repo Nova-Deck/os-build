@@ -409,6 +409,14 @@ TAB="$SRC/SunshineTab.tsx"
 grep -q 'tabs.some((t) => t.id === TAB_ID)' "$TAB" && grep -q 'if (apps.length === 0) return result' "$TAB" \
     && ok "the Sunshine tab skips only itself, and is not there without a host" || bad "the Sunshine tab can hide other tabs, or show up empty"
 grep -q 'isTabMasterInstalled()' "$TAB" && ok "with TabMaster installed the tab list is left to it" || bad "the tab list is patched even when TabMaster owns it"
+# As in test-store-library.sh: a hook in the route patch is one of Decky's router's (React error 310).
+route_patch=$(sed -n '/addPatch("\/library"/,/afterPatch(props\.children, "type"/p' "$TAB")
+page=$(sed -n '/afterPatch(props\.children, "type"/,/ret1?\.type/p' "$TAB")
+all_hooks=$(sed -n '/addPatch("\/library"/,$p' "$TAB" | grep -cE '\buse(State|Effect|Memo|Ref|Callback)\(')
+[[ -n $route_patch ]] && ! grep -qE '\buse[A-Z][A-Za-z]*\(' <<<"$route_patch" \
+    && ok "the route patch calls no hook of its own" || bad "the Sunshine tab calls a hook inside Decky's router (React error 310 beside Epic and GOG)"
+[[ $(grep -cE '\buse(State|Effect)\(' <<<"$page") -eq 3 && $all_hooks -eq 3 ]] \
+    && ok "the library page's hooks all come before its first return" || bad "the Sunshine tab calls a hook after a return, so their number can change"
 grep -q 'const removeSunshineTab = applySunshineTab()' "$SRC/index.tsx" && grep -A3 'onDismount' "$SRC/index.tsx" | grep -q 'removeSunshineTab()' \
     && ok "the tab patch is applied at load and removed at dismount" || bad "the tab patch is not removed at dismount"
 grep -q 'AddShortcut' "$SRC/tiles.ts" && ! grep -rq 'shortcuts\.vdf' "$PLUGIN/py_modules" "$PLUGIN/main.py" \

@@ -634,6 +634,18 @@ grep -q 'call<\[\], Members | { error: string }>("library_tabs")' "$TABS" \
 grep -A1 'addPatch("/library"' "$TABS" | grep -q 'isTabMasterInstalled()' \
   && ok "with TabMaster installed the tab list is left to it" \
   || bad "LibraryTabs.tsx patches the tab list even when TabMaster owns it"
+# Decky calls a route patch inside its ROUTER's render: a hook called there is one of the router's, and
+# the next plugin to add one after the first render takes Steam's UI down (React error 310). Hooks
+# belong to the library page's own component, and come before anything that can return.
+route_patch=$(sed -n '/addPatch("\/library"/,/afterPatch(props\.children, "type"/p' "$TABS")
+page=$(sed -n '/afterPatch(props\.children, "type"/,/ret1?\.type/p' "$TABS")
+all_hooks=$(sed -n '/addPatch("\/library"/,$p' "$TABS" | grep -cE '\buse(State|Effect|Memo|Ref|Callback)\(')
+[[ -n $route_patch ]] && ! grep -qE '\buse[A-Z][A-Za-z]*\(' <<<"$route_patch" \
+  && ok "the route patch calls no hook of its own" \
+  || bad "LibraryTabs.tsx calls a hook inside Decky's router (React error 310 with a second plugin)"
+[[ $(grep -cE '\buse(State|Effect)\(' <<<"$page") -eq 3 && $all_hooks -eq 3 ]] \
+  && ok "the library page's hooks all come before its first return" \
+  || bad "LibraryTabs.tsx calls a hook after a return, so their number can change"
 grep -q 'const removeLibraryTabsPatch = applyLibraryTabsPatch()' "$SRC/index.tsx" \
   && grep -A14 'onDismount()' "$SRC/index.tsx" | grep -q 'removeLibraryTabsPatch()' \
   && ok "the tabs patch is applied at load and removed at dismount" \

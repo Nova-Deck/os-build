@@ -21,6 +21,7 @@ const TABS: { id: string; store: StoreId; title: string }[] = [
   { id: "novadeck-epic", store: "epic", title: "Epic" },
   { id: "novadeck-gog", store: "gog", title: "GOG" },
 ];
+const OUR_TABS = new Set(TABS.map((t) => t.id));
 // Ours go right after this one of Steam's (or at the end, should a client rename it).
 const AFTER_TAB = "Installed";
 
@@ -133,7 +134,7 @@ function spliceTabs(result: unknown, deps: unknown[]): unknown {
   const isTuple = Array.isArray(result[0]);
   const tabs = (isTuple ? result[0] : result) as SteamTab[];
   if (!tabs[0]?.id || !tabs[0]?.content) return result;
-  if (tabs.some((t) => t.id?.startsWith("novadeck-"))) return result; // already ours this render
+  if (tabs.some((t) => OUR_TABS.has(t.id))) return result; // already ours this render
 
   const template = tabs.find((t) => t.id === "AllGames");
   if (!template) return bail("no AllGames tab to copy", result);

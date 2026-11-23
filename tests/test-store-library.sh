@@ -625,6 +625,12 @@ grep -q 'call<\[\], Members | { error: string }>("library_tabs")' "$TABS" \
   && ! grep -q 'type-games' "$TABS" \
   && ok "tab membership is the backend's registry, never a filter over Steam's games collection" \
   || bad "LibraryTabs.tsx does not take its members from library_tabs alone"
+# Another first-party plugin may add a tab too (novadeck-streaming's Sunshine tab). Skipping on any
+# id that starts with novadeck- took Epic and GOG away as soon as it was there first.
+! grep -q 'startsWith("novadeck-")' "$TABS" && grep -q 'tabs.some((t) => OUR_TABS.has(t.id))' "$TABS" \
+  && grep -q 'const OUR_TABS = new Set(TABS.map((t) => t.id))' "$TABS" \
+  && ok "only its own tabs make it skip a render, never another plugin's" \
+  || bad "LibraryTabs.tsx skips its tabs when another plugin has added one"
 grep -A1 'addPatch("/library"' "$TABS" | grep -q 'isTabMasterInstalled()' \
   && ok "with TabMaster installed the tab list is left to it" \
   || bad "LibraryTabs.tsx patches the tab list even when TabMaster owns it"

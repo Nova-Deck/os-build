@@ -425,6 +425,23 @@ not a section of an existing panel. Two halves:
   Sunshine UUID, not its name or IP, which change), never Steam's appid
   (`novadeck-stores/py_modules/novadeck_stores/shortcuts.py`, `src/lib/shortcutBridge.ts`).
   Step 4's generic Moonlight tile then becomes optional.
+- **The paired-host tiles get their own category, "Sunshine" (user, 2026-11-23).** Proposed: a library tab like the
+  stores plugin's Epic and GOG (`src/LibraryTabs.tsx`), its members our registry, no tab while there is no host. Not a
+  Steam collection: the stores plugin writes none, and collections look account-synced, as the hidden list does. Trap:
+  the stores plugin skips its own tabs when any tab id starts with `novadeck-`, so a second plugin's tab would remove
+  Epic and GOG. Narrow that guard to its own ids first, with a test. Two plugins then wrap the same `useMemo`: check
+  both on hardware, in both load orders.
+- **Order of work (2026-11-23), one commit or more each, tests first:**
+  - **7a, host panel.** `novadeck-streaming` ("NovaDeck Streaming", name open). Start/stop the unit, pending pairings
+    and PIN, paired guests with Disconnect (`enabled`) and Remove (in a confirm, not a QAM row), session count, the
+    sentence about menus. Backend talks to 127.0.0.1:47990 with `cacert.pem` pinned. It is root and the password file
+    is deck's, so it opens it `O_NOFOLLOW`, regular file, uid 1000, size-capped: a symlink to a root-only file would
+    otherwise be sent to whatever listens on that port. `POST /api/pin` wants `pairing_id` (32 hex), `pin` (4 digits)
+    and a 1-128 byte `name`. No API lists sessions, so "connected" is a count from the log, not a name per guest.
+  - **7b, advert.** D-Bus `RegisterService` with the withdrawal in the unit's `ExecStopPost`, as `novadeck-pairingd`.
+  - **7c, join.** Discovery, `moonlight pair`, per-host tiles, the Sunshine tab. First check: `moonlight pair` opens a
+    QML window (`CliPair.qml`) and needs a display, so it may have to run from a tile, or under `offscreen`.
+  - **7d, security review**, then the HW test together with the `keep_host_audio` patch (step 5's unit on a new card).
 - **Duplicate tiles on the user's other devices (user, 2026-11-23; low priority, decide with this step).** Both test
   devices are signed in to the same Steam account, and Steam offers each one's shortcuts to the other for Remote
   Play, so the Max and the FIT each list two Moonlight and two Google Play Store cards. A host and a guest normally

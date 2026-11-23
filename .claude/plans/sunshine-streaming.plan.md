@@ -145,9 +145,8 @@ stream piped back to the host; nothing written on the card.
 - **GATE PASSED 2026-11-21:** a LAN PC Moonlight paired (host added by IP, PIN in the web UI) and streamed
   the FIT's Desktop: session encoder `hevc_vaapi` on iris, 14.99 Mbit/s CBR, SDR Rec. 709 8-bit, KMS grab of
   DSI-1 under gamescope. Found on the way, all for steps 5-7:
-  - **No audio:** run as root, Sunshine gets "Couldn't connect to pulseaudio: Access denied" (the user's
-    pipewire-pulse). It must run in the deck user's session, which then needs cap_sys_admin for KMS
-    (or another capture path): step 5.
+  - **No audio:** run as root, Sunshine gets "Couldn't connect to pulseaudio: Access denied".
+    Cause and options in step 5, "Audio": the socket is not found, not refused.
   - **Web UI by LAN IP is CSRF-blocked:** only localhost origins are allowed by default; the test added
     `csrf_allowed_origins = https://<ip>:47990`. Whatever owns Sunshine's config (step 7) must set it, or pair
     another way.
@@ -209,7 +208,12 @@ stream piped back to the host; nothing written on the card.
     under gamescope. **HW-passed 2026-11-22 (FIT):** with `HAS_DESKTOP_ENVIRONMENT=0` in Moonlight's
     environment the UI opens fullscreen. Shipped in the package (user: no desktop session on
     novadeck to get in the way): its `.desktop` runs `env LIBVA_DRIVER_NAME=qcom HAS_DESKTOP_ENVIRONMENT=0
-    moonlight`, so a tile made from it with "Add a non-Steam game" carries both; step 7's tiles reuse it.
+    moonlight`, so a tile made from it carries both; step 7's tiles reuse it. **HW-passed from a card
+    2026-11-23 (c639fc5, FIT and Max):** UI fullscreen on both, `qcom_drv_video.so` mapped. The tile cannot
+    be made by hand: Steam Big Picture has no "Add a non-Steam game" (user, 2026-11-23). The test added it
+    over SSH as deck (`touch /tmp/addnonsteamgamefile`, then `novadeck-steam-url` with
+    `steam://addnonsteamgame/<url-encoded .desktop path>`, confirmed in `shortcuts.vdf`). Until step 7
+    adds it, Moonlight has no entry point for a user.
   - **Controller input reaches the host: PASSED** (the Max's D-pad drives the FIT's Steam UI; Sunshine
     makes a virtual Xbox Series pad).
   - **Stats overlay at 1080p60: user-read 2026-11-22, "numbers looked good (60fps)"** (FIT host, PGRC
@@ -221,7 +225,11 @@ stream piped back to the host; nothing written on the card.
     **With 0002 (full picture):** 60.14 fps in / decoded / rendered; host processing 5.0/11.6/7.3 ms;
     0.00% / 0.00% dropped; network 4 ms (variance 1); decode 0.95 ms; queue 0.04 ms; render 2.28 ms.
     Host time and decode rose with real content in the whole frame (the cropped run was mostly black).
-  - Audio still absent: Sunshine runs as root and pulseaudio refuses it (`Access denied`), step 5.
+  - **Card gate 2026-11-23 (c639fc5, build 20261123T081735Z, Steam UI, HEVC 1080p60 SDR, overlay read from
+    gamescope screenshots):** Max host to FIT client 60.12 fps in / decoded / rendered, host processing
+    5.1/11.9/6.9 ms, network 5 ms, decode 0.94 ms, queue 0.03 ms, render 2.28 ms. FIT host to Max client
+    60.59 fps, 3.9/9.2/4.5 ms, 4 ms, 1.29 ms, 0.07 ms, 2.72 ms. 0.00% / 0.00% dropped both ways.
+  - Audio still absent (step 5, "Audio").
   - **Blocker found: Moonlight hung at stream start** inside the Vulkan loader's
     `vkCreateXlibSurfaceKHR` (its startup decoder probe, HEVC Main10 via libplacebo), re-entering itself
     forever at 100% CPU. Cause: `VK_LAYER_NOVADECK_game_priority` (packages/novadeck-gpu-priority, enabled
@@ -281,6 +289,7 @@ stream piped back to the host; nothing written on the card.
     in the Max's log at every init). 0002 treats 90 like 270, masked with `DRM_MODE_ROTATE_MASK`.
     **HW-passed 2026-11-22** (`pacman -U` on the Max's dev card): the log says `Detected a
     quarter-turned panel`, and the FIT shows the Max's whole UI upright, edge to edge, no pillarbox.
+    **HW-passed from a card 2026-11-23 (c639fc5, Max).**
     Not done: the cursor plane's position on a rotated panel (in CRTC coordinates; the
     270 path has the same gap), and 180.
   - Sunshine's GPU work (capture import + RGB->NV12) submits on ring 0, gamescope's ring, so it preempts
@@ -288,6 +297,24 @@ stream piped back to the host; nothing written on the card.
     game GPU time. Measure the hit before step 7 ships.
   2. Later: blend the planes above into Sunshine's existing EGL RGB->NV12 pass (it already imports the
      cursor plane), replaying the DPU's position, alpha blend and rotation.
+
+- **Audio: why it is absent (2026-11-23, read-only on the FIT).** Not a refusal. Run as root with no session
+  environment, libpulse finds no server: `pactl` as root gives `Connection refused`, and so does
+  `XDG_RUNTIME_DIR=/run/user/1000` ("not owned by us"). Sunshine prints `Access denied` because it hands
+  `pa_context_connect`'s plain -1 to `pa_strerror` and `PA_ERR_ACCESS` is 1 (`audio.cpp`, 63d35f7). With
+  `PULSE_SERVER=unix:/run/user/1000/pulse/native` root connects to deck's server. Two ways:
+  1. **Recommended: a system unit with `User=deck`, `AmbientCapabilities=CAP_SYS_ADMIN`,
+     `XDG_RUNTIME_DIR=/run/user/1000`, `LIBVA_DRIVER_NAME=qcom`.** No root network service.
+     **Not `setcap`**: file capabilities set `AT_SECURE`, and libva reads `LIBVA_DRIVER_NAME` with
+     `secure_getenv`, so the VA driver would not load. Ambient capabilities without file capabilities do
+     not set it (`security/commoncap.c:1000-1006`, 7.3.5). Sunshine keeps `CAP_SYS_ADMIN` in its DRM worker
+     thread only (`drmModeGetFB2`) and drops it everywhere else, so its children do not get it. deck is in
+     `video`, `render` and `input` (uinput/uhid). Untested.
+  2. Root plus `PULSE_SERVER`: one variable, but a root service on the LAN.
+- **Audio: the host goes silent by default.** Unless the client asks for host audio, Sunshine moves the default
+  sink to its own null sink for the stream (`src/audio.cpp:196`), and Moonlight does not ask by default. For
+  playing together both sides must hear the game: step 7's tiles need `moonlight stream --audio-on-host`
+  (`app/cli/commandlineparser.cpp:361`).
 
 ### 6. Input and several players (host)
 - Sunshine's virtual pads (uinput/uhid) must show up in Steam Input as extra controllers. Check player
@@ -335,6 +362,10 @@ not a section of an existing panel. Two halves:
   Moonlight's overlay, two players with pads.
 - The black stream (step 3) is the overlay-plane capture, fixed by step 5's patch 0001: passed with the
   FIT as host (2026-11-22); re-check it here with an SM8250 host, idle and with D-pad input.
+  Card regression 2026-11-23 (c639fc5, FIT host, Max client): no black (user). Two full-screen planes were
+  live (plane-1 zpos 0, plane-2 zpos 1), the layout that used to go black. Over the 93 s before the unit was
+  stopped gamescope never moved the picture between planes (0 follows, 0 reinits), so the follow path was not
+  exercised this time (it was on 2026-11-22).
 
 ## Open questions
 - Does Steam offer the Remote Play Together invite on an Epic/GOG shortcut? Not checked; a yes covers

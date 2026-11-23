@@ -483,7 +483,10 @@ not a section of an existing panel. Two halves:
     - 7 min 22 s, 59.9 fps, 0.16% lost on the network (one burst of 32 frames), host 5.8 ms average, decode 1.0 ms.
     - **Disconnect from the panel ends the stream** (Moonlight: `Connection terminated: -1`), the pad is gone, and the
       guest is enabled again. Sunshine logs no line for it.
-    - Owed: Dismiss, wrong PIN, the confirms, the panel over a game, rejoin after a Disconnect, gone from the Max on
+    - Rejoin after a Disconnect: no PIN. Start+Select+L1+R1 on the guest closes the stream, straight back to Steam; the
+      pad stays on the host, as for any close. **Kept that way (user):** the tile never uses `--quit-after`, which from
+      the source ends the stream for every guest.
+    - Owed: Dismiss, wrong PIN, the confirms, the panel over a game, gone from the Max on
       stop, one registration after SIGKILL, forget a host, a PC listing the FIT, the setpriv prefix.
 
 - **Duplicate tiles on the user's other devices (user, 2026-11-23; low priority, decide with this step).** Both test

@@ -444,7 +444,12 @@ not a section of an existing panel. Two halves:
     /api/pin` answers once the pairing finished (source), so "paired" is what happened. A block that times out is
     followed by an allow. Accepted: software running as deck can reach Decky's backend and switch hosting on.
     On hardware: the PIN dialog and the confirms by gamepad in the QAM, over a game too; Disconnect unplugs the pad.
-  - **7b, advert.** D-Bus `RegisterService` with the withdrawal in the unit's `ExecStopPost`, as `novadeck-pairingd`.
+  - **7b, advert. Written 2026-11-23, not on hardware.** `/usr/lib/novadeck/sunshine-advert`, run by the unit as root
+    (`-+` on `ExecStartPost` and `ExecStopPost`): waits for 47989, clears a stale registration, registers
+    `_nvstream._tcp`. Instance `novadeck-<8 hex>` from an app-specific machine id, as all hostnames are equal. Known
+    limit: restarting systemd-resolved drops it until the next start. On hardware: Moonlight on the Max and on a PC list
+    the FIT unasked; it disappears on stop; a SIGKILL leaves one registration, not a failed one; `resolvectl` on both
+    devices with the same hostname. Open (asked): `sunshine_name` = the device model, or every host reads "novadeck".
   - **7c, join.** Discovery, `moonlight pair`, per-host tiles, the Sunshine tab. First check: `moonlight pair` opens a
     QML window (`CliPair.qml`) and needs a display, so it may have to run from a tile, or under `offscreen`.
   - **7d, security review**, then the HW test together with the `keep_host_audio` patch (step 5's unit on a new card).

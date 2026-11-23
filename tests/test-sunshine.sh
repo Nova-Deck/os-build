@@ -65,6 +65,10 @@ check "a crash keeps its log across the restart" "$(unitkey RuntimeDirectoryPres
 
 echo "3. what it exposes"
 check "web UI answers the device only" "$(confkey origin_web_ui_allowed)" pc
+check "a guest cannot type on the host" "$(confkey keyboard)" disabled
+check "a guest cannot move the host's pointer" "$(confkey mouse)" disabled
+# The controller is the point of hosting a co-op game, so it stays at Sunshine's default, on.
+check "a guest's controller is left on" "$(confkey controller)" ""
 check "log level leaves request headers out" "$(confkey min_log_level)" info
 check "credentials live in the runtime directory" \
     "$(confkey credentials_file)" "/run/$(unitkey RuntimeDirectory)/credentials.json"

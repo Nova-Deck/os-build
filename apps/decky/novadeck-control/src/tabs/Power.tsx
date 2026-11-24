@@ -2,8 +2,10 @@ import { ButtonItem, Field, PanelSection, PanelSectionRow } from "@decky/ui";
 import { useEffect, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { getPowerStatus, resetFanCurve, setCpuScheduler, setFanCurve } from "../backend";
+import { GamescopeTweaks } from "../components/GamescopeTweaks";
 import { SelectEdit, SliderEdit } from "../components/widgets";
-import type { Config, PowerStatus } from "../types";
+import { applyChanges, clone } from "../lib/util";
+import type { Config, GameTweaks, PowerStatus } from "../types";
 
 // The power profile and the GPU clock are not here: Steam's own Performance panel owns both,
 // globally and per game. This tab carries what Steam has no control for.
@@ -78,6 +80,15 @@ export function Power({ config, setConfig }: { config: Config; setConfig: Dispat
     }, 300);
   };
 
+  const patchSystemWide = (changes: Partial<GameTweaks>) => {
+    setConfig((current) => {
+      if (!current) return current;
+      const next = clone(current);
+      applyChanges(next.tweaks.global, changes);
+      return next;
+    });
+  };
+
   const resetCurve = async () => {
     if (curveTimer.current !== null) window.clearTimeout(curveTimer.current);
     curveTimer.current = null;
@@ -140,6 +151,13 @@ export function Power({ config, setConfig }: { config: Config; setConfig: Dispat
           </div>
         </PanelSection>
       ) : null}
+      <PanelSection title="GAMESCOPE">
+        <div className="novadeck-field-note">
+          Thread policy for the compositor, with or without a game running. A game can override it
+          from its own settings.
+        </div>
+        <GamescopeTweaks settings={config.tweaks.global} patch={patchSystemWide} />
+      </PanelSection>
       {hasCurve ? (
         <PanelSection title="FAN CURVE">
           <div className="novadeck-field-note">

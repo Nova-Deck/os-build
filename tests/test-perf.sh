@@ -211,6 +211,19 @@ check("enabled game overlays", np.settings_for(tweaks, "620").get("gamescopeNice
 check("missing enabled ignored", np.settings_for(tweaks, "990").get("gamescopeNice"), 5)
 np.TWEAKS_CONFIG = tmp / "no-such-file.json"
 check("absent tweaks empty", np.load_tweaks(), {})
+# Only the compositor keys are system-wide. A game setting in "global" reached some games and not
+# others (cores as a pin with no topology, FEX only where game-launch runs) and a game could not
+# undo it, so it is not read there at all.
+game_keys = {"nice": -5, "cores": "big", "singleCore": True, "wineTopology": False}
+wide = {"global": {**game_keys, "gamescopeNice": 5, "gamescopeCores": "big"},
+        "games": {"620": {"enabled": True, "nice": -3}, "700": {"cores": "prime"}}}
+check("global carries the compositor keys only", np.settings_for(wide, None),
+      {"gamescopeNice": 5, "gamescopeCores": "big"})
+check("a game inherits no game setting from global", np.settings_for(wide, "620"),
+      {"gamescopeNice": 5, "gamescopeCores": "big", "enabled": True, "nice": -3})
+check("a game that is not enabled gets the compositor keys only", np.settings_for(wide, "700"),
+      {"gamescopeNice": 5, "gamescopeCores": "big"})
+check("a malformed global is no settings", np.settings_for({"global": ["gamescopeNice"]}, None), {})
 np.TWEAKS_CONFIG = tmp / "tweaks.json"
 
 # sanitize
@@ -232,6 +245,13 @@ check("game nice kept", game.get("nice"), -3)
 check("game cores resolved", game.get("cores"), [2, 3, 4, 5, 6, 7])
 check("game nice clamped", np.sanitize_perf({"nice": 99}).get("nice"), 19)
 check("bad game cores dropped", "cores" in np.sanitize_perf({"cores": "nope"}), False)
+
+# With nothing to override, "all" is no pin: enforcing it would undo the game's own thread pinning on
+# every tick. It still names the set that singleCore narrows, and still clears a gamescope pin.
+check("cores all is no pin", "cores" in np.sanitize_perf({"cores": "all"}), False)
+check("cores all with singleCore pins one", np.sanitize_perf({"cores": "all", "singleCore": True})["cores"], [7])
+check("gamescopeCores all still clears a system-wide pin",
+      np.sanitize_perf({"gamescopeCores": "all"})["gamescopeCores"], [0, 1, 2, 3, 4, 5, 6, 7])
 
 # scheduler: per-game ONLY, and never merged through settings_for/sanitize_perf. A global
 # section must not be able to set it -- the system-wide value is powerd's CpuScheduler, and a
@@ -747,6 +767,24 @@ pw.apply_env({"cores": "2,3", "env": {"PROTON_CPU_TOPOLOGY": None}})
 check("a tombstone on one unsets the pair", topology(), (None, None))
 
 clear_topology()
+clear_topology()
+pw.apply_env({"cores": "all"})
+check("cores all exports no topology", topology(), (None, None))
+pw.apply_env({"cores": "all", "singleCore": True})
+check("cores all with singleCore exports the one cpu", topology(), ("1:7", "1:7"))
+clear_topology()
+
+# game-launch reads this game's entry and nothing else: it only runs for games that have one.
+launch = {"global": {"fexProfile": "fast", "cores": "big", "thunks": {"GL": True}, "env": {"A": "1"}},
+          "games": {"620": {"enabled": True, "nice": -3}, "630": {"framegen": True, "env": {"B": "2"}}}}
+pw.TWEAKS = tmp / "launch-tweaks.json"
+import json as _launch_json
+pw.TWEAKS.write_text(_launch_json.dumps(launch))
+loaded = pw.load_tweaks({"games": {}})
+check("a game takes nothing from global", pw.settings_for(loaded, "620"), {"enabled": True, "nice": -3})
+check("a framegen-only game takes its env alone", pw.settings_for(loaded, "630"), {"env": {"B": "2"}})
+check("a game with no entry takes nothing", pw.settings_for(loaded, "990"), {})
+
 pw.apply_env({"cores": "bogus", "env": {"STILL": "applied"}})
 check("bad cores does not block env", os.environ.get("STILL"), "applied")
 
@@ -764,7 +802,7 @@ base_fex.write_text(_json.dumps(
                 "MaxInst": "5000", "ProfileStats": "0", "SilentLog": "1"},
      "ThunksDB": {"Vulkan": 0, "GL": 0}}))
 pw.BASE_CONFIG = base_fex
-fake_profiles = {"default": {"config": {"TSOEnabled": "1"}}, "fast": {"config": {"TSOEnabled": "0"}}}
+fake_profiles = {"strict": {"config": {"TSOEnabled": "1"}}, "fast": {"config": {"TSOEnabled": "0"}}}
 
 os.environ["XDG_CACHE_HOME"] = str(fex_home)
 os.environ["XDG_RUNTIME_DIR"] = str(tmp / "runtimedir")
@@ -800,7 +838,7 @@ check("override emits ONLY the named thunk",
       pw.resolve_thunks({"fexProfile": "fast", "thunks": {"Vulkan": True}}, base_thunks),
       {"Vulkan": 1})
 check("override can also turn one off",
-      pw.resolve_thunks({"fexProfile": "default", "thunks": {"asound": False}}, base_thunks),
+      pw.resolve_thunks({"fexProfile": "strict", "thunks": {"asound": False}}, base_thunks),
       {"asound": 0})
 # The base config decides which thunks EXIST; a stray name cannot inject one, the same rule the
 # `allowed` filter enforces for Config keys.
@@ -818,10 +856,13 @@ for var in ("STEAM_FEX_TSOENABLED", "STEAM_FEX_MULTIBLOCK", "STEAM_COMPAT_FEX_CO
 
 check("nothing explicit claims no slot (perf-only tweaks leave Steam's curation alive)",
       pw.write_config({"nice": -5, "cores": "big"}, "620", fake_profiles), None)
-# A profile name no profile declares is not an explicit choice either — falling back to the
-# default profile here is exactly the old clobber in disguise.
+# A profile name no profile declares is not an explicit choice either — falling back to some
+# profile here is exactly the old clobber in disguise. "default" is such a name since it was
+# dropped, and older tweaks files carry it.
 check("bogus profile name is not an explicit choice",
       pw.write_config({"fexProfile": "bogus"}, "620", fake_profiles), None)
+check("the dropped default profile is not an explicit choice",
+      pw.write_config({"fexProfile": "default"}, "620", fake_profiles), None)
 
 # Curation seeds the config; an explicit thunk override rides ON TOP of it, not instead of it.
 os.environ["STEAM_FEX_TSOENABLED"] = "0"
@@ -837,7 +878,7 @@ check("with no curation either, only the thunk is written", generated, {"Config"
 os.environ["STEAM_FEX_TSOENABLED"] = "0"
 
 # An explicit profile is the user's deliberate choice and beats the curated value.
-written = pw.write_config({"fexProfile": "default"}, "620", fake_profiles)
+written = pw.write_config({"fexProfile": "strict"}, "620", fake_profiles)
 generated = _json.loads(written.read_text())
 check("explicit profile beats appinfo curation", generated["Config"]["TSOEnabled"], "1")
 
@@ -878,9 +919,12 @@ check("relative XDG_CACHE_HOME falls back to ~/.cache",
 profiles_path = os.path.join(os.environ["ROOT_DIR"], "rootfs/overlay/usr/share/novadeck/fex-profiles.json")
 contract = _json.loads(pathlib.Path(profiles_path).read_text())
 profs = contract["profiles"]
-check("the three presets exist", sorted(profs), ["compatible", "default", "fast"])
-check("default runs Multiblock (matches the system FEX config)",
-      profs["default"]["config"]["Multiblock"], "1")
+# No "default" preset: it forced the usual values over Steam's own per-title ones, where choosing
+# nothing is what leaves them alone.
+check("the presets are the two that differ from choosing none", sorted(profs), ["compatible", "fast"])
+pw.PROFILES = pathlib.Path(profiles_path)
+check("game-launch accepts the shipped contract", sorted(pw.load_profiles()["profiles"]), ["compatible", "fast"])
+check("fast keeps Multiblock on", profs["fast"]["config"]["Multiblock"], "1")
 # The escape hatch: at least one preset must stay conservative, or "try Compatible" stops meaning
 # anything for a title that miscompiles under the aggressive JIT.
 check("compatible keeps the conservative JIT settings",

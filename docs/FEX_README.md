@@ -37,20 +37,19 @@ defaults here keeps them user-overridable.
 
 ## `usr/share/novadeck/fex-profiles.json`
 
-Named tuning presets (`default` / `fast` / `compatible`) plus the thunk defaults. Read by
-`game-launch`.
+Named tuning presets (`fast` / `compatible`). Read by `game-launch`. A preset forces every key it
+lists over the running FEX's own config **and** over Steam's per-title TSO and Multiblock choices.
+There is no `default` preset for that reason: it listed the usual values, so choosing it undid
+Steam's choices, where choosing nothing leaves them alone. A `"fexProfile": "default"` in an older
+file applies nothing.
 
-`default` runs **`Multiblock: 1`** — the JIT compiles across basic blocks rather than one at a
-time. It is on in our system FEX config too (the ROCKNIX-derived tuning both reference titles were
-validated with), so the Proton-side default carrying `0` was an inconsistency rather than a
-decision. `compatible` deliberately keeps it **off**, together with `X87ReducedPrecision: 0` and
+`compatible` deliberately keeps **`Multiblock`** (the JIT compiling across basic blocks) **off**, together with `X87ReducedPrecision: 0` and
 the strict TSO set: that preset is the escape hatch for a title that miscompiles, and it stops
 being one if every preset shares the aggressive JIT settings. Users select a profile per game through `/etc/novadeck/game-tweaks.json`
 (absent by default; `/etc` is an overlay, so writing it is a supported local change):
 
 ```json
 {
-  "global": { "fexProfile": "default" },
   "games": { "858710": { "enabled": true, "fexProfile": "fast" } }
 }
 ```

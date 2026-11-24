@@ -1,15 +1,15 @@
 import { PanelSection } from "@decky/ui";
 import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
+import { GamescopeTweaks, NICE_MAX, NICE_MIN } from "../components/GamescopeTweaks";
 import { ButtonRow, SelectEdit, SliderEdit, ToggleRow } from "../components/widgets";
 import { editTargetOptions, knownGameName } from "../lib/games";
 import { syncLaunchWrapper } from "../lib/launchWrapper";
-import { clone } from "../lib/util";
+import { applyChanges, clone } from "../lib/util";
 import type { Config, GameTweaks } from "../types";
 
 const CORE_OPTIONS = [
   { data: "", label: "(unchanged)" },
-  { data: "all", label: "All cores" },
   { data: "big", label: "Big cores" },
   { data: "prime", label: "Prime cores" },
   { data: "little", label: "Little cores" },
@@ -44,38 +44,29 @@ const AUTO_HDR_OPTIONS = [
   { data: "off", label: "Off" },
 ];
 
-const NICE_MIN = -20;
-const NICE_MAX = 19;
-
 export function Games({ config, setConfig }: { config: Config; setConfig: Dispatch<SetStateAction<Config | null>> }) {
   // Default the editor to the running game — the common case is "tune what I'm playing".
   const [target, setTarget] = useState(config.game?.appid || "");
   const isGame = target !== "";
-  const settings: GameTweaks = (isGame ? config.tweaks.games[target] : config.tweaks.global) || {};
-  const gameEnabled = !isGame || settings.enabled === true;
+  const settings: GameTweaks = (isGame && config.tweaks.games[target]) || {};
+  const gameEnabled = settings.enabled === true;
+  // "all" in an older file is no pin, so it shows as none.
+  const cores = settings.cores === "all" ? "" : settings.cores || "";
 
   const patch = (changes: Partial<GameTweaks>) => {
     setConfig((current) => {
-      if (!current) return current;
+      if (!current || !isGame) return current;
       const next = clone(current);
-      const section = isGame
-        ? (next.tweaks.games[target] = { ...(next.tweaks.games[target] || { enabled: true }) })
-        : next.tweaks.global;
-      if (isGame) {
-        // Cache the display name alongside the settings. Names are otherwise read from Steam's
-        // appmanifest, which the uninstall deletes — and these entries outlive the install, so
-        // without this the dropdown shows a bare "App <id>" for settings that are still live.
-        // Only ever written when a name is actually resolvable: a blank must not overwrite a
-        // good cached one, which is what happens when the entry is edited while uninstalled.
-        const known = knownGameName(current, target);
-        if (known) (section as any).name = known;
-      }
-      for (const [key, value] of Object.entries(changes)) {
-        // undefined is "remove the key": the consumers treat absence as "no opinion",
-        // which is different from any concrete value.
-        if (value === undefined) delete (section as any)[key];
-        else (section as any)[key] = value;
-      }
+      const section: GameTweaks = { ...(next.tweaks.games[target] || { enabled: true }) };
+      next.tweaks.games[target] = section;
+      // Cache the display name alongside the settings. Names are otherwise read from Steam's
+      // appmanifest, which the uninstall deletes — and these entries outlive the install, so
+      // without this the dropdown shows a bare "App <id>" for settings that are still live.
+      // Only ever written when a name is actually resolvable: a blank must not overwrite a
+      // good cached one, which is what happens when the entry is edited while uninstalled.
+      const known = knownGameName(current, target);
+      if (known) section.name = known;
+      applyChanges(section, changes);
       return next;
     });
   };
@@ -128,7 +119,7 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
     void syncLaunchWrapper(target, framegenOn);
     removeGameEntry();
     // The entry is gone, so the target it names no longer exists unless the game is installed.
-    // Falling back to Global also makes the deletion visible: the row disappears from the list.
+    // Falling back to no target also makes the deletion visible: the row disappears from the list.
     setTarget("");
   };
 
@@ -136,6 +127,9 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
     { data: "", label: "(unchanged)" },
     ...Object.entries(config.fexProfiles).map(([name, label]) => ({ data: name, label })),
   ];
+
+  // A profile this image does not ship (an older file may say "default") applies nothing, and shows so.
+  const fexProfile = settings.fexProfile && config.fexProfiles[settings.fexProfile] ? settings.fexProfile : "";
 
   const thunkValue = (name: string) => {
     const chosen = settings.thunks ? settings.thunks[name] : undefined;
@@ -183,113 +177,101 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
           />
         ) : null}
       </PanelSection>
-      <PanelSection title="GAME PROCESS TREE">
-        <div className="novadeck-field-note">
-          Applied to the whole running game tree within a few seconds — no relaunch needed.
-        </div>
-        <ToggleRow
-          label="Set nice priority"
-          value={settings.nice !== undefined}
-          disabled={!gameEnabled}
-          onChange={(on) => patch({ nice: on ? -5 : undefined })}
-        />
-        {settings.nice !== undefined ? (
-          <SliderEdit label="Nice" value={settings.nice} min={NICE_MIN} max={NICE_MAX} step={1}
-            disabled={!gameEnabled} onChange={(v) => patch({ nice: v })} />
-        ) : null}
-        <SelectEdit label="CPU cores" value={settings.cores || ""} options={CORE_OPTIONS}
-          disabled={!gameEnabled} onChange={(v) => patch({ cores: v || undefined })} />
-        <ToggleRow
-          label="Pin to a single core"
-          description="Narrows the selection above to one core, the fastest of those chosen. Fixes older games whose threading breaks across many cores."
-          value={settings.singleCore === true}
-          disabled={!gameEnabled}
-          onChange={(on) => patch({ singleCore: on ? true : undefined })}
-        />
-        {settings.cores || settings.singleCore ? (
-          <ToggleRow
-            label="Shape Wine CPU topology"
-            description="Wine/Proton reports only the pinned cores. Off: the game sees every core but still runs on the pinned ones. Takes effect on next launch."
-            value={settings.wineTopology !== false}
-            disabled={!gameEnabled}
-            onChange={(on) => patch({ wineTopology: on ? undefined : false })}
-          />
-        ) : null}
-      </PanelSection>
-      <PanelSection title="GAMESCOPE">
-        <div className="novadeck-field-note">
-          Thread policy for the compositor while this target is running.
-        </div>
-        <ToggleRow
-          label="Set gamescope nice"
-          value={settings.gamescopeNice !== undefined}
-          disabled={!gameEnabled}
-          onChange={(on) => patch({ gamescopeNice: on ? -5 : undefined })}
-        />
-        {settings.gamescopeNice !== undefined ? (
-          <SliderEdit label="Gamescope nice" value={settings.gamescopeNice} min={NICE_MIN} max={NICE_MAX} step={1}
-            disabled={!gameEnabled} onChange={(v) => patch({ gamescopeNice: v })} />
-        ) : null}
-        <SelectEdit label="Gamescope cores" value={settings.gamescopeCores || ""} options={CORE_OPTIONS}
-          disabled={!gameEnabled} onChange={(v) => patch({ gamescopeCores: v || undefined })} />
-      </PanelSection>
-      {/* Overrides a SYSTEM-WIDE setting whose only home is the Power tab, so the consumer reads
-          it per-game and ignores it in `global` — offering it on the global target would be a
-          control that writes a key nothing acts on. There is no per-game power profile here:
-          Steam's own per-game performance settings own the profile and the GPU clock. */}
+      {/* Every setting below is this game's own. What is system-wide lives in the Power tab. */}
       {isGame ? (
-        <PanelSection title="CPU SCHEDULER">
-          <div className="novadeck-field-note">
-            Overrides the system-wide scheduler while this game runs, then restores it.
-          </div>
-          <SelectEdit label="Scheduler" value={settings.scheduler || ""} options={SCHEDULER_OPTIONS}
-            disabled={!gameEnabled} onChange={(v) => patch({ scheduler: v || undefined })} />
-        </PanelSection>
-      ) : null}
-      {/* Per-game only, like the scheduler: the system-wide value is gamescope's launch value,
-          and only on a board with an HDR panel — elsewhere powerd ignores the key, so the
-          control would write a setting nothing acts on. */}
-      {isGame && config.hdrPanel ? (
-        <PanelSection title="HDR">
-          <div className="novadeck-field-note">
-            AutoHDR expands this game's SDR picture to HDR while it runs, then restores the
-            session's setting. Games that output HDR themselves are left alone. Applied within a
-            few seconds — no relaunch needed.
-          </div>
-          <SelectEdit
-            label="AutoHDR"
-            value={settings.autoHdr === undefined ? "" : settings.autoHdr ? "on" : "off"}
-            options={AUTO_HDR_OPTIONS}
-            disabled={!gameEnabled}
-            onChange={(v) => patch({ autoHdr: v === "" ? undefined : v === "on" })}
-          />
-        </PanelSection>
-      ) : null}
-      <PanelSection title="X86 EMULATION">
-        <div className="novadeck-field-note">
-          FEX profile for x86 titles. Takes effect on next launch.
-        </div>
-        <SelectEdit label="FEX profile" value={settings.fexProfile || ""} options={fexOptions}
-          disabled={!gameEnabled} onChange={(v) => patch({ fexProfile: v || undefined })} />
-      </PanelSection>
-      {/* Per-game only, though the consumer would honour a global map too: forcing a thunk is a
-          known-crashy experiment (see the note below), so it stays scoped to one title. */}
-      {isGame && config.fexThunks.length > 0 ? (
-        <PanelSection title="FEX THUNKS">
-          <div className="novadeck-field-note">
-            Routes a guest library to the host driver. Ours ship OFF on purpose — host GPU thunks
-            are known to crash native x86-64 Linux games. Forcing one is an experiment, not a fix.
-            Takes effect on next launch.
-          </div>
-          <div className="novadeck-field-note">
-            No effect on games running on an arm64 Proton: their graphics calls already go to the
-            host driver.
-          </div>
-          {config.fexThunks.map((name) => (
-            <SelectEdit key={name} label={name} value={thunkValue(name)} options={THUNK_OPTIONS}
-              disabled={!gameEnabled} onChange={(v) => setThunk(name, v)} />
-          ))}
-        </PanelSection>
+        <>
+          <PanelSection title="GAME PROCESS TREE">
+            <div className="novadeck-field-note">
+              Applied to the whole running game tree within a few seconds — no relaunch needed.
+            </div>
+            <ToggleRow
+              label="Set nice priority"
+              value={settings.nice !== undefined}
+              disabled={!gameEnabled}
+              onChange={(on) => patch({ nice: on ? -5 : undefined })}
+            />
+            {settings.nice !== undefined ? (
+              <SliderEdit label="Nice" value={settings.nice} min={NICE_MIN} max={NICE_MAX} step={1}
+                disabled={!gameEnabled} onChange={(v) => patch({ nice: v })} />
+            ) : null}
+            <SelectEdit label="CPU cores" value={cores} options={CORE_OPTIONS}
+              disabled={!gameEnabled} onChange={(v) => patch({ cores: v || undefined })} />
+            <ToggleRow
+              label="Pin to a single core"
+              description="Narrows the selection above to one core, the fastest of those chosen. Fixes older games whose threading breaks across many cores."
+              value={settings.singleCore === true}
+              disabled={!gameEnabled}
+              onChange={(on) => patch({ singleCore: on ? true : undefined })}
+            />
+            {cores || settings.singleCore ? (
+              <ToggleRow
+                label="Shape Wine CPU topology"
+                description="Wine/Proton reports only the pinned cores. Off: the game sees every core but still runs on the pinned ones. Takes effect on next launch."
+                value={settings.wineTopology !== false}
+                disabled={!gameEnabled}
+                onChange={(on) => patch({ wineTopology: on ? undefined : false })}
+              />
+            ) : null}
+          </PanelSection>
+          <PanelSection title="GAMESCOPE">
+            <div className="novadeck-field-note">
+              Thread policy for the compositor while this game runs. Overrides the Power tab's.
+            </div>
+            <GamescopeTweaks settings={settings} disabled={!gameEnabled} patch={patch} />
+          </PanelSection>
+          {/* Overrides a system-wide setting whose only home is the Power tab. There is no per-game
+              power profile here: Steam's own per-game performance settings own the profile and the
+              GPU clock. */}
+          <PanelSection title="CPU SCHEDULER">
+            <div className="novadeck-field-note">
+              Overrides the system-wide scheduler while this game runs, then restores it.
+            </div>
+            <SelectEdit label="Scheduler" value={settings.scheduler || ""} options={SCHEDULER_OPTIONS}
+              disabled={!gameEnabled} onChange={(v) => patch({ scheduler: v || undefined })} />
+          </PanelSection>
+          {/* The system-wide value is gamescope's launch value, and only on a board with an HDR panel:
+              elsewhere powerd ignores the key, so the control would write a setting nothing acts on. */}
+          {config.hdrPanel ? (
+            <PanelSection title="HDR">
+              <div className="novadeck-field-note">
+                AutoHDR expands this game's SDR picture to HDR while it runs, then restores the
+                session's setting. Games that output HDR themselves are left alone. Applied within a
+                few seconds — no relaunch needed.
+              </div>
+              <SelectEdit
+                label="AutoHDR"
+                value={settings.autoHdr === undefined ? "" : settings.autoHdr ? "on" : "off"}
+                options={AUTO_HDR_OPTIONS}
+                disabled={!gameEnabled}
+                onChange={(v) => patch({ autoHdr: v === "" ? undefined : v === "on" })}
+              />
+            </PanelSection>
+          ) : null}
+          <PanelSection title="X86 EMULATION">
+            <div className="novadeck-field-note">
+              FEX profile for x86 titles. Takes effect on next launch.
+            </div>
+            <SelectEdit label="FEX profile" value={fexProfile} options={fexOptions}
+              disabled={!gameEnabled} onChange={(v) => patch({ fexProfile: v || undefined })} />
+          </PanelSection>
+          {config.fexThunks.length > 0 ? (
+            <PanelSection title="FEX THUNKS">
+              <div className="novadeck-field-note">
+                Routes a guest library to the host driver. Ours ship OFF on purpose — host GPU thunks
+                are known to crash native x86-64 Linux games. Forcing one is an experiment, not a fix.
+                Takes effect on next launch.
+              </div>
+              <div className="novadeck-field-note">
+                No effect on games running on an arm64 Proton: their graphics calls already go to the
+                host driver.
+              </div>
+              {config.fexThunks.map((name) => (
+                <SelectEdit key={name} label={name} value={thunkValue(name)} options={THUNK_OPTIONS}
+                  disabled={!gameEnabled} onChange={(v) => setThunk(name, v)} />
+              ))}
+            </PanelSection>
+          ) : null}
+        </>
       ) : null}
     </>
   );

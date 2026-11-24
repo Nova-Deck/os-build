@@ -95,8 +95,6 @@ def load_profiles():
     profiles = contract.get("profiles")
     if not isinstance(contract.get("defaults"), dict) or not isinstance(profiles, dict):
         raise ValueError("fex-profiles.json: missing 'defaults' or 'profiles'")
-    if "default" not in profiles:
-        raise ValueError("fex-profiles.json: no 'default' profile to fall back to")
     for name, profile in profiles.items():
         if not isinstance(profile, dict) or not isinstance(profile.get("config"), dict):
             raise ValueError(f"fex-profiles.json: profile '{name}' has no config object")
@@ -113,15 +111,16 @@ def load_tweaks(defaults):
         return tweaks
     if not isinstance(loaded, dict):
         return tweaks
-    if isinstance(loaded.get("global"), dict):
-        tweaks["global"].update(loaded["global"])
     if isinstance(loaded.get("games"), dict):
         tweaks["games"] = loaded["games"]
     return tweaks
 
 
 def settings_for(tweaks, game_id):
-    """Global settings, overlaid with this game's if it has an entry that is explicitly enabled.
+    """This game's settings, if it has an entry that is explicitly enabled.
+
+    The file's "global" section is not read: this only runs for a game that has launch options of
+    its own, so a setting there would reach some games and not others.
 
     `enabled` and `framegen` are DIFFERENT OPT-INS and neither implies the other. `enabled` means
     the user turned on per-game TUNING (cores, scheduler, FEX profile, power profile); `framegen`
@@ -136,17 +135,14 @@ def settings_for(tweaks, game_id):
     would hand it `cores`/`scheduler` the user never enabled -- the same conflation, pointed the
     other way.
     """
-    settings = dict(tweaks.get("global", {}))
     game = tweaks.get("games", {}).get(str(game_id)) if game_id else None
     if not isinstance(game, dict):
-        return settings
+        return {}
     if game.get("enabled") is True:
-        settings.update(game)
-    elif game.get("framegen") is True:
-        env = game.get("env")
-        if isinstance(env, dict):
-            settings["env"] = env
-    return settings
+        return dict(game)
+    if game.get("framegen") is True and isinstance(game.get("env"), dict):
+        return {"env": game["env"]}
+    return {}
 
 
 def resolve_config(settings, profiles):
@@ -352,10 +348,9 @@ def apply_env(settings):
     re-pinning by hand.
     """
     cores = None
-    single = settings.get("singleCore") is True
-    if novadeck_perf is not None and ("cores" in settings or single):
+    if novadeck_perf is not None:
         try:
-            cores = novadeck_perf.resolve_cores(settings.get("cores"), single=single)
+            cores = novadeck_perf.game_cores(settings)
         except ValueError as exc:
             print(f"{PROG}: ignoring bad 'cores' ({exc})", file=sys.stderr)
     if cores and settings.get("wineTopology") is False:

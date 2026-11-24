@@ -55,7 +55,7 @@ export function editTargetOptions(config: Config): DropdownChoice[] {
   if (running) present.add(running.appid);
   const list = Array.from(games.values()).sort((a, b) => gameDisplayName(a).localeCompare(gameDisplayName(b)));
   return [
-    { data: "", label: "Global (all games)" },
+    { data: "", label: "Choose a game" },
     ...list.map((game) => ({
       data: game.appid,
       // Say the state outright. These entries are not dormant: they stay keyed on the appid and

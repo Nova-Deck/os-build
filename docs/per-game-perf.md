@@ -20,19 +20,25 @@ is deliberately shallower than the consumers' own.
 ```
 
 The key under `games` is the Steam appid. A game entry applies only while that game is running
-**and** carries `"enabled": true` — the same contract the FEX keys use. Game values overlay the
-`global` section. The file is optional; when it is absent nothing is enforced.
+**and** carries `"enabled": true` — the same contract the FEX keys use. The file is optional; when
+it is absent nothing is enforced.
+
+`global` carries the two compositor keys only, because the compositor runs whether a game does or
+not; a game's own value wins. Every other key is per game, and one left in `global` is ignored. A
+game setting there could not mean one thing: `cores` would pin games that have no `game-launch` to
+hand Wine the matching topology, a FEX profile would reach only games that do, and a game could not
+undo either.
 
 ## Keys
 
-Compositor (gamescope):
+Compositor (gamescope), in `global` or per game:
 
 | Key | Type | Effect |
 |-----|------|--------|
 | `gamescopeNice` | int −20…19 | niceness applied to every gamescope thread |
 | `gamescopeCores` | cpulist or preset | pin gamescope's threads to these CPUs |
 
-The game itself:
+The game itself, per game only:
 
 | Key | Type | Effect |
 |-----|------|--------|
@@ -64,8 +70,7 @@ control only there. A game that outputs HDR itself is left alone by AutoHDR eith
 
 ### `scheduler` is per-game only
 
-Every other key here can also be set in `global`. This one cannot, and the omission is
-deliberate: it already has exactly one system-wide home, `novadeck-powerd`'s persisted
+It is not read in `global`, because it already has exactly one system-wide home, `novadeck-powerd`'s persisted
 `CpuScheduler` property, driven by `novadeck-scheduler` and the plugin's **Power** tab. A
 `global.scheduler` would be a second place to set the same value with no way for either to show
 the other's state. The plugin therefore offers the control on a game target only.
@@ -128,6 +133,9 @@ comes from `cores` while the count comes from the flag — `"cores": "little"` w
 pins one *little* core, which is all a cheap title needs, while `"all"` pins the prime one.
 Set on its own it narrows every online CPU. It never applies to `gamescopeCores`.
 
+`"cores": "all"` without `singleCore` is no pin. Enforcing it would widen the threads a game pins
+itself, on every tick, and replace Proton's own per-title core counts.
+
 **This is the lever for games from roughly the mid-2000s that hang or freeze under load.** Titles
 of that era spin-wait and assume a few identical cores, which this hardware is the opposite of —
 heterogeneous big.LITTLE — so their threading can livelock or deadlock outright. Pinning to one
@@ -143,7 +151,7 @@ one, whatever the topology.
 `gamescopeCores` accepts a kernel-style cpulist (`"0,3-5"`) or a named preset: `all`, `little`,
 `big` (everything that is not little, prime included), `prime`. Presets are resolved from the live
 CPU topology (`cpu_capacity`), so they mean the right cores on every supported board. A per-game
-`"gamescopeCores": "all"` explicitly clears a restrictive global pin.
+`"gamescopeCores": "all"` explicitly clears a restrictive system-wide pin.
 
 ## How enforcement works
 

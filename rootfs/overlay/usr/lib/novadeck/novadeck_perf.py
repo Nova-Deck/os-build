@@ -5,14 +5,14 @@ Owns three things:
   1. The cpulist grammar ("3-5,7") plus the named core presets (all / big /
      prime / little), resolved from sysfs cpu_capacity so no per-device core
      table has to be maintained.
-  2. The game-tweaks read path: /etc/novadeck/game-tweaks.json, the SAME file
-     and merge contract proton-wrapper uses for FEX profiles (global section,
-     per-appid sections gated on "enabled": true). This module consumes the
-     perf keys: gamescopeNice, gamescopeCores — plus the per-game-only
-     overrides of system-wide settings, scheduler and autoHdr, which it
-     resolves for powerd to apply (see per_game_choice). There is no per-game power profile
-     here: Steam's own per-game performance settings own that, through the
-     steamos-manager shim.
+  2. The game-tweaks read path: /etc/novadeck/game-tweaks.json, the same file
+     game-launch reads the FEX keys from. Every game setting is per game, in a
+     per-appid section gated on "enabled": true. The "global" section carries
+     the compositor's keys only (SYSTEM_WIDE_KEYS), and a game may override
+     those. The per-game-only overrides of system-wide settings, scheduler and
+     autoHdr, are resolved here for powerd to apply (see per_game_choice).
+     There is no per-game power profile here: Steam's own per-game performance
+     settings own that, through the steamos-manager shim.
   3. The enforcement tick novadeck-powerd runs: find gamescope, find the
      running game's appid (walk the Steam client's process tree via
      /proc/<pid>/task/<tid>/children and read the game's environ — root only),
@@ -36,6 +36,8 @@ PROC_ROOT = pathlib.Path(os.environ.get("NOVADECK_PERF_PROC", "/proc"))
 SYS_CPU_ROOT = pathlib.Path(
     os.environ.get("NOVADECK_PERF_SYSCPU", "/sys/devices/system/cpu"))
 
+# The keys "global" may carry: the compositor runs whether a game does or not.
+SYSTEM_WIDE_KEYS = ("gamescopeNice", "gamescopeCores")
 CORE_PRESETS = ("all", "big", "prime", "little")
 # The CPU schedulers a tweak may select. novadeck-powerd imports this as its own
 # CPU_SCHEDULERS so the D-Bus enum and the tweaks-file domain cannot drift apart.
@@ -144,8 +146,9 @@ def preset_cpus(name):
 
 
 def resolve_cores(value, single=False):
-    """None/"" = unset (inherit). "all" is explicit: a per-game "all" must
-    clear a restrictive global. Unknown CPUs are an error, not a truncation.
+    """None/"" = unset. "all" is explicit: a per-game gamescopeCores "all" must
+    clear a restrictive system-wide one (a game's own `cores` goes through
+    game_cores). Unknown CPUs are an error, not a truncation.
 
     `single` NARROWS whatever the preset or cpulist resolved to down to exactly
     one cpu: the highest-capacity member, ties broken by lowest cpu number. It
@@ -183,6 +186,22 @@ def resolve_cores(value, single=False):
     return cpus
 
 
+def game_cores(settings):
+    """The cpus a game's `cores` and `singleCore` pin it to, or None for no pin.
+
+    "all" is no pin: there is nothing for a game to override, and enforcing it
+    would widen the threads a game pins itself, on every tick. With singleCore
+    it still means "the fastest of all of them". ValueError as resolve_cores."""
+    value = settings.get("cores")
+    # A MODIFIER on `cores`, and meaningful on its own (it then narrows the full
+    # online set). Deliberately NOT applied to gamescopeCores: pinning the
+    # compositor to one cpu is never the workaround being asked for.
+    single = settings.get("singleCore") is True
+    if value == "all" and not single:
+        return None
+    return resolve_cores(value, single=single)
+
+
 def clamp(value, low, high):
     return max(low, min(high, int(value)))
 
@@ -205,9 +224,11 @@ def load_tweaks():
 
 
 def settings_for(tweaks, appid):
-    """Global settings overlaid with this game's — the proton-wrapper contract:
-    a game section only applies when it is explicitly "enabled": true."""
-    settings = dict(tweaks.get("global") or {})
+    """This game's settings, over the system-wide compositor ones. A game section
+    only applies when it is explicitly "enabled": true."""
+    wide = tweaks.get("global")
+    wide = wide if isinstance(wide, dict) else {}
+    settings = {key: wide[key] for key in SYSTEM_WIDE_KEYS if key in wide}
     game = (tweaks.get("games") or {}).get(str(appid)) if appid else None
     if isinstance(game, dict) and game.get("enabled") is True:
         settings.update(game)
@@ -219,17 +240,12 @@ def sanitize_perf(settings):
     clean = {}
     if _is_int(settings.get("nice")):
         clean["nice"] = clamp(settings["nice"], NICE_MIN, NICE_MAX)
-    # singleCore is a MODIFIER on `cores`, and is meaningful on its own (it then
-    # narrows the full online set). Deliberately NOT applied to gamescopeCores:
-    # pinning the compositor to one cpu is never the workaround being asked for.
-    single = settings.get("singleCore") is True
-    if "cores" in settings or single:
-        try:
-            cores = resolve_cores(settings.get("cores"), single=single)
-            if cores is not None:
-                clean["cores"] = cores
-        except ValueError:
-            pass
+    try:
+        cores = game_cores(settings)
+        if cores is not None:
+            clean["cores"] = cores
+    except ValueError:
+        pass
     # Only the opt-out means anything here, and only with a pin to time: see pinnable_pids.
     if "cores" in clean and settings.get("wineTopology") is False:
         clean["wineTopology"] = False
@@ -249,8 +265,7 @@ def per_game_choice(tweaks, appid, key, domain):
     """A per-game override of a SYSTEM-WIDE setting: the running game's value for
     `key`, or None for "no opinion".
 
-    Deliberately NOT part of sanitize_perf/settings_for, and deliberately not
-    readable from the "global" section: each setting reached through here already
+    Deliberately NOT part of sanitize_perf/settings_for: each setting reached through here already
     has exactly one system-wide home — a persisted novadeck-powerd property that
     a CLI and the plugin both drive. A `global.<key>` would be a second place to
     set the same value, with no way for either to show the other's state. So
@@ -395,7 +410,7 @@ def _environ_appid(pid):
         # 0 is Valve's "no app" sentinel, and it appears in practice: Steam runs
         # the compat tool as `proton run` with STEAM_COMPAT_APP_ID=0 for prefix
         # setup and tool probing. Treating it as an appid would tag those helpers
-        # as a game tree and tune them with the global settings.
+        # as the running game, in place of the real one.
         if value.isdigit() and value != "0":
             return value
     return None

@@ -474,13 +474,7 @@ else
     bad "game-launch reads only 'enabled' -- frame generation would have to claim per-game tuning to work"
 fi
 
-# The framegen branch must merge ONLY env. A settings.update(game) there would hand a
-# framegen-only game the cores/scheduler it never enabled -- the same conflation, reversed.
-if awk '/elif game.get\("framegen"\) is True:/,/^    return settings/' "$LAUNCH" | grep -q 'settings.update(game)'; then
-    bad "the framegen branch merges the whole entry -- it would apply tuning the user never enabled"
-else
-    ok "the framegen branch contributes env only, never the tuning keys"
-fi
+# That it contributes ONLY env, never the tuning keys, is run for real in test-perf.sh.
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

@@ -469,6 +469,16 @@ grep -q 'as shipped' "$PLUGIN/src/tabs/Games.tsx" \
   && ok "thunk control is tri-state — 'as shipped' is a distinct default state, not a checkbox" \
   || bad "no 'as shipped' state in the thunk control: a plain checkbox would write a value for every thunk and seize Valve's per-title curation"
 
+# --- game settings are per game; only the compositor's are system-wide -----------------------
+# The consumers ignore every other key in "global" (tests/test-perf.sh), so a control that writes
+# one there would do nothing.
+grep -q 'tweaks\.global' "$PLUGIN/src/tabs/Games.tsx" \
+  && bad "the Games tab still edits the global section, which carries no game setting" \
+  || ok "the Games tab edits one game's settings only"
+grep -q 'GamescopeTweaks settings={config.tweaks.global}' "$PLUGIN/src/tabs/Power.tsx" \
+  && ok "the Power tab edits the system-wide gamescope settings" \
+  || bad "nothing edits the system-wide gamescope settings any more"
+
 # --- the AutoHDR control -------------------------------------------------------------------
 # powerd ignores `autoHdr` on a board without an HDR panel (tests/test-auto-hdr.sh), so the tab
 # may only offer it where the backend reports one — from device-env, the session's own HDR gate.
@@ -478,9 +488,10 @@ grep -q '"hdrPanel": hdr_panel()' "$PLUGIN/main.py" \
 grep -q 'NOVADECK_PANEL_HDR_NITS' "$PLUGIN/py_modules/novadeck_control/system.py" \
   && ok "hdr_panel reads the board's declared HDR peak" \
   || bad "hdr_panel does not read NOVADECK_PANEL_HDR_NITS — a second HDR fact that can disagree with the session"
-grep -q 'isGame && config.hdrPanel' "$PLUGIN/src/tabs/Games.tsx" \
+awk '/^      \{isGame \? \($/ {game=1} /^      \) : null\}$/ {game=0} game && /\{config\.hdrPanel \?/ {found=1}
+     END {exit !found}' "$PLUGIN/src/tabs/Games.tsx" \
   && ok "AutoHDR control is per-game and HDR-panel only" \
-  || bad "AutoHDR control is not gated on isGame && hdrPanel — it would write a key nothing acts on"
+  || bad "AutoHDR control is not gated on hdrPanel — it would write a key nothing acts on"
 
 # --- the plugin backend --------------------------------------------------------------------
 if python3 -m py_compile "$PLUGIN/main.py" "$PLUGIN"/py_modules/novadeck_control/*.py 2>/dev/null; then
@@ -636,6 +647,9 @@ if "abc" in clean["games"] or "123" in clean["games"]:
 ok("sanitizer drops non-digit appids and non-dict sections")
 if clean["games"].get("40800") != {"enabled": True, "cores": "big"}:
     bad("sanitizer damaged a valid game section")
+if clean["global"] != {"nice": -5}:
+    bad("sanitizer rewrote the global section — settings no longer read there must stay in the file")
+ok("sanitizer keeps an older file's global section as it is")
 ok("sanitizer passes a valid section through untouched (deep validation stays at the consumers)")
 try:
     tweaks.sanitize_tweaks({"global": {"x": "y" * (300 * 1024)}})

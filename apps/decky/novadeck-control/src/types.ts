@@ -30,6 +30,7 @@ export interface GameTweaks {
 }
 
 export interface Tweaks {
+  /** Only the gamescope* keys act here; every other setting is per game. */
   global: GameTweaks;
   games: Record<string, GameTweaks>;
 }

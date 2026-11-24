@@ -102,9 +102,10 @@ Two tabs; the backend runs as root inside the loader (`"flags": ["root"]`).
 
 - **Games** — edits `/etc/novadeck/game-tweaks.json` (atomic writes, same file + `enabled:true`
   contract as [per-game-perf.md](per-game-perf.md)). Scheduling keys apply within one powerd
-  tick; exec-time keys (FEX profile, Wine topology) need a game relaunch. The sanitizer refuses
-  appid `0` — Valve's "no app" sentinel can never grow a section.
-- **Power** — the system-wide CPU scheduler and the editable fan curve (one slider per fixed
+  tick; exec-time keys (FEX profile, Wine topology) need a game relaunch. Every setting here is one
+  game's own. The sanitizer refuses appid `0` — Valve's "no app" sentinel can never grow a section.
+- **Power** — what is system-wide: the CPU scheduler, gamescope's thread policy (the `global`
+  section of `game-tweaks.json`, which a game can override) and the editable fan curve (one slider per fixed
   temperature stop, see [fan-curve.md](fan-curve.md)), straight to powerd's
   `org.novadeck.Power1` on the system bus (via `busctl`; the loader's bundled Python has no dbus
   module). The scheduler row states when a running game's per-game override is what is loaded,

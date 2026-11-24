@@ -285,6 +285,42 @@ for libdir in usr/lib usr/lib32; do
   done
 done
 
+# Only our drivers in the guest's driver folders. Before every native x86 Linux game, pressure-vessel
+# resolves each DRI driver and Vulkan ICD the guest lists, through the x86 ld.so under FEX. The guest
+# lists 66 DRI names and 9 Vulkan drivers per arch, and almost none can load on these SoCs. Measured
+# on the Pocket FIT (2026-11-24, Parking Garage Rally Circuit, warm, 5+5 launches): the window 0.7 s
+# sooner, and every filtered launch faster than every unfiltered one. A slower SoC has more to gain.
+#
+# The payload keeps msm (the kernel driver's name picks it), kgsl, libdril (what the others link to)
+# and zink (a per-title opt-in); the rest of Mesa's names are display-only kmsro ones. Then each folder
+# is marked OPAQUE, so overlayfs hides the guest's own entries behind ours. Hidden with them: the
+# guest's software fallbacks (lavapipe, swrast).
+#
+# user.overlay.opaque + the overlay row's `userxattr`, not trusted.overlay.opaque: the build container
+# has no CAP_SYS_ADMIN and cannot set trusted.*. If the marker or the option is lost, the mount
+# still works and the guest's folders are simply back.
+hide_guest_drivers() {  # <payload root>
+  local root="$1" keep="kgsl_dri.so libdril_dri.so msm_dri.so zink_dri.so" libdir name entry
+  for libdir in lib lib32; do
+    for name in $keep; do
+      [ -e "$root/usr/$libdir/dri/$name" ] \
+        || { echo "ERROR: x86 payload has no usr/$libdir/dri/$name, and the guest's copy is about to be hidden" >&2; return 1; }
+    done
+    for entry in "$root/usr/$libdir"/dri/*; do
+      case " $keep " in *" ${entry##*/} "*) ;; *) rm -f "$entry" ;; esac
+    done
+  done
+  python3 - "$root/usr/lib/dri" "$root/usr/lib32/dri" "$root/usr/share/vulkan/icd.d" <<'PYOPAQUE'
+import os, sys
+for d in sys.argv[1:]:
+    os.setxattr(d, "user.overlay.opaque", b"y")
+    if os.getxattr(d, "user.overlay.opaque") != b"y":
+        sys.exit(f"ERROR: {d}: user.overlay.opaque did not stick")
+PYOPAQUE
+}
+echo "  hiding the FEX guest's unusable drivers behind ours"
+hide_guest_drivers "$stage/$payload_dest"
+
 mkdir -p "$stage/usr/share/guestos/fex-mesa"
 if ! grep -q '/usr/share/guestos/fex-mesa' "$stage/etc/fstab" 2>/dev/null; then
   printf '%s\n' \
@@ -294,7 +330,7 @@ if ! grep -q '/usr/share/guestos/fex-mesa' "$stage/etc/fstab" 2>/dev/null; then
     '# The merged FEX guest, for BOTH x86 consumers: Valve'"'"'s FEX compat tool (Steam app' \
     '# 3127680) probes this path for graphics_provider.json, and the system FEX Config.json' \
     '# points RootFS here. Our x86 Turnip payload overlays the guest'"'"'s stock driver.' \
-    'overlay  /usr/share/guestos/fex-mesa  overlay  ro,nofail,lowerdir=/usr/share/novadeck/guestos-x86-mesa:/run/novadeck/guestos-lower,x-systemd.requires-mounts-for=/run/novadeck/guestos-lower,x-systemd.before=local-fs.target  0 0' \
+    'overlay  /usr/share/guestos/fex-mesa  overlay  ro,nofail,userxattr,lowerdir=/usr/share/novadeck/guestos-x86-mesa:/run/novadeck/guestos-lower,x-systemd.requires-mounts-for=/run/novadeck/guestos-lower,x-systemd.before=local-fs.target  0 0' \
     >>"$stage/etc/fstab"
 fi
 

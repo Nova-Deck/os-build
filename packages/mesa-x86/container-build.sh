@@ -145,8 +145,8 @@ EOF
 
 # The GL runtime, both arches, taken whole from `meson install` so symlink chains and the dri/
 # hardlinks to libdril_dri.so survive (cp -a keeps both). The overlay lays these over the guest's
-# files of the same names; the guest's other dri/*.so stay hardlinks of ITS libdril and keep
-# loading ITS libgallium, which is harmless because nothing here is a vendor the board can bind.
+# files of the same names; in dri/ and icd.d the assembler keeps only the drivers these SoCs load
+# and hides the guest's own entries (hide_guest_drivers in rootfs/lib-assemble-storage.sh).
 # Headers, pkg-config files and the static/dev symlinks are left out: nothing builds in the guest.
 for arch in x86_64:lib i686:lib32; do
   dest=/tmp/dest-${arch%%:*} libdir=${arch##*:}

@@ -89,7 +89,9 @@ grep -q "erofs  loop,ro,nofail,noatime,x-systemd.before=local-fs.target" "$ASSEM
 # 3. The overlay row: merged at the probed path, payload as the TOP lower layer, ordered after
 #    the guest mount. One grep because the row only works whole -- a reordered lowerdir silently
 #    renders on the guest's stock driver, and a missing requires-mounts-for races the lower mount.
-if grep -qF "overlay  $MOUNTPOINT  overlay  ro,nofail,lowerdir=$PAYLOAD:$LOWER,x-systemd.requires-mounts-for=$LOWER,x-systemd.before=local-fs.target" "$ASSEMBLE"; then
+#    userxattr is what makes the kernel read check 10b's user.overlay.opaque markers; without it the
+#    mount still works and the guest's driver folders silently come back.
+if grep -qF "overlay  $MOUNTPOINT  overlay  ro,nofail,userxattr,lowerdir=$PAYLOAD:$LOWER,x-systemd.requires-mounts-for=$LOWER,x-systemd.before=local-fs.target" "$ASSEMBLE"; then
     ok "overlay row merges payload over guest at $MOUNTPOINT, ordered after the lower mount"
 else
     bad "overlay fstab row missing or reshaped -- expected lowerdir=$PAYLOAD:$LOWER at $MOUNTPOINT"
@@ -156,6 +158,54 @@ if [[ -n $snap && -n $ver && $snap == "${ver//-//}" ]]; then
 else
     bad "mesa-x86 snapshot '$snap' does not match fex-rootfs version '$ver' -- bump the pins together"
 fi
+
+# 10b. Only our drivers are visible in the guest's driver folders. Runs the assembler's own function
+#      on a fabricated payload, so this checks what it does, not what it says.
+fn=$(sed -n '/^hide_guest_drivers()/,/^}/p' "$ASSEMBLE")
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+mkpayload() {  # <root>
+    local lib
+    for lib in lib lib32; do
+        mkdir -p "$1/usr/$lib/dri" "$1/usr/$lib/gbm"
+        : >"$1/usr/$lib/dri/libdril_dri.so"; : >"$1/usr/$lib/gbm/dri_gbm.so"; : >"$1/usr/$lib/libvulkan_freedreno.so"
+        for n in msm kgsl zink apple rockchip zynqmp-dpsub; do ln -s libdril_dri.so "$1/usr/$lib/dri/${n}_dri.so"; done
+    done
+    mkdir -p "$1/usr/share/vulkan/icd.d" "$1/usr/share/vulkan/implicit_layer.d"
+    : >"$1/usr/share/vulkan/icd.d/freedreno_icd.x86_64.json"; : >"$1/usr/share/vulkan/icd.d/freedreno_icd.i686.json"
+}
+opaque() { python3 -c 'import os,sys
+try: sys.exit(os.getxattr(sys.argv[1],"user.overlay.opaque")!=b"y")
+except OSError: sys.exit(1)' "$1"; }
+if [[ -z $fn ]]; then
+    bad "the assembler has no hide_guest_drivers()"
+else
+    eval "$fn"
+    mkpayload "$T/p"
+    ( hide_guest_drivers "$T/p" ) >/dev/null 2>"$T/err" || bad "hide_guest_drivers failed: $(cat "$T/err")"
+    for lib in lib lib32; do
+        got=$(cd "$T/p/usr/$lib/dri" && LC_ALL=C ls -A | tr '\n' ' ')
+        [[ $got == "kgsl_dri.so libdril_dri.so msm_dri.so zink_dri.so " ]] \
+            && ok "usr/$lib/dri keeps msm, kgsl, zink and libdril only" \
+            || bad "usr/$lib/dri holds: $got"
+        opaque "$T/p/usr/$lib/dri" && ok "usr/$lib/dri is opaque over the guest's" || bad "usr/$lib/dri carries no opaque marker"
+        [[ -e $T/p/usr/$lib/gbm/dri_gbm.so ]] && ! opaque "$T/p/usr/$lib/gbm" && ! opaque "$T/p/usr/$lib" \
+            && ok "usr/$lib and usr/$lib/gbm still merge with the guest's" \
+            || bad "usr/$lib or usr/$lib/gbm lost content or turned opaque -- the guest's own libraries would vanish"
+    done
+    [[ $(ls -A "$T/p/usr/share/vulkan/icd.d" | wc -l) == 2 ]] && opaque "$T/p/usr/share/vulkan/icd.d" \
+        && ok "icd.d holds our two ICDs, opaque over the guest's" || bad "icd.d is wrong or not opaque"
+    opaque "$T/p/usr/share/vulkan/implicit_layer.d" \
+        && bad "implicit_layer.d turned opaque -- the guest's Vulkan layers would vanish" \
+        || ok "implicit_layer.d still merges with the guest's"
+    # A keep-list name the payload lacks must stop the build: opaque + missing = no driver at all.
+    mkpayload "$T/q"; rm "$T/q/usr/lib32/dri/zink_dri.so"
+    ( hide_guest_drivers "$T/q" ) >/dev/null 2>&1 \
+        && bad "a payload without zink_dri.so was accepted -- the guest's copy is hidden, so nothing would load" \
+        || ok "a payload missing a kept driver is refused"
+fi
+grep -q '^hide_guest_drivers "\$stage/\$payload_dest"$' "$ASSEMBLE" \
+    && ok "the assembler runs hide_guest_drivers on the staged payload" \
+    || bad "the assembler never calls hide_guest_drivers"
 
 echo
 echo "system FEX shares the merged tree"

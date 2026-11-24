@@ -381,8 +381,10 @@ stream piped back to the host; nothing written on the card.
   - A `cancel` was also sent once at 15:51 after a relaunch; the log does not say whether a button press or
     Moonlight itself sent it.
 - Still to test: two guests and their order on rejoin (then `SteamClient.Input.RegisterForControllerListChanges`
-  and `SwapControllerOrder`, names from `@decky/ui`'s types, behaviour unverified); an Epic/GOG tile with Steam
-  Input off, where the game sees raw pads; a game that looks for pads only at launch.
+  and `SwapControllerOrder`, names from `@decky/ui`'s types, behaviour unverified); a game that looks for pads only at
+  launch.
+- **An Epic game takes the guest's input (user, 2026-11-24), most probably with Steam Input on.** Steam Input off will
+  not be tested (user).
 - Two clients: this Sunshine has no `channels` option and I found no limit on sessions (63d35f7); the second client
   sends `resume`, and only the first one's "mute host" choice counts.
   **Two at once run on the FIT (2026-11-23, Max + PC):** two HEVC 1080p60 15 Mbit/s iris sessions, busiest Sunshine
@@ -528,8 +530,11 @@ not a section of an existing panel. Two halves:
     - **Security review before merge (2026-11-24, read-only, two reviewers), no route in for an unpaired device.** Fixed
       and built, next card: 0004 (a stream and a Quit belong to the connection that asked), `/dev/uhid` open to deck only
       while hosting, refused system calls on the unit, texts, the `setpriv` test. `RestrictNamespaces` is documented as
-      not enforced on arm64. Test on the card: the service starts and streams under the filter, a guest's pad, uhid closed
-      after Stop (`getfacl /dev/uhid`), then the three Quit tests again. Accepted: a paired guest can run programs (they
+      not enforced on arm64. **Card ac5fc53, HW-passed 2026-11-24 (FIT host, Max guest):** starts and streams under the
+      filter, no refused call in the log; the pad appears; `/dev/uhid` open to deck while hosting, closed at Stop, root only
+      on the Max with hosting off; rejoin after Stop and after a Disconnect; a Disconnect ends the Max's stream (Moonlight
+      `terminated: -1`) and takes its pad, so 0004 ties the stream to its guest. 1 min 44 s: 59.9 fps shown, 0.00% lost,
+      host 4.5 ms. Not tested on this card: Quit with two guests (no PC, user), a host on the Max. Accepted: a paired guest can run programs (they
       have the menus); deck can reach Sunshine's `CAP_SYS_ADMIN` while it hosts, since it can attach to it (no Yama, user,
       2026-11-24); a Quit while another guest is still starting can end that start.
     - Owed: that pad, tabs of both stores and Sunshine side by side, a rejoin order with two pads, fps with

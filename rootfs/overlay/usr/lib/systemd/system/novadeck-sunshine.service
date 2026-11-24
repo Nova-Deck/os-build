@@ -28,6 +28,12 @@ AmbientCapabilities=CAP_SYS_ADMIN
 CapabilityBoundingSet=CAP_SYS_ADMIN
 NoNewPrivileges=yes
 ProtectSystem=full
+# What CAP_SYS_ADMIN would otherwise open to code that gets to run in here. It listens on the LAN, and the
+# capture thread keeps the capability. Refused calls fail; capture, encoding and the pads use none of them.
+# unshare and setns are in the list as well: RestrictNamespaces is documented to do nothing on arm64.
+RestrictNamespaces=yes
+SystemCallFilter=~bpf perf_event_open fanotify_init unshare setns @mount @keyring @swap
+SystemCallErrorNumber=EPERM
 
 # The VA-API driver over iris is only loaded by a client that names it (packages/qcom-va-driver).
 Environment=LIBVA_DRIVER_NAME=qcom
@@ -42,17 +48,21 @@ RuntimeDirectory=novadeck-sunshine
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=restart
 
+# The guests' gamepads are made through /dev/uhid, closed to deck otherwise (71-novadeck-uhid.rules). Fails
+# the start: a guest without a pad cannot play.
+ExecStartPre=+/usr/bin/setfacl -m u:deck:rw /dev/uhid
 # Fails the start when it cannot set a password, so the port never opens without one.
 ExecStartPre=/usr/lib/novadeck/sunshine-creds
 # Sunshine on /etc/novadeck/sunshine.conf, under the device's name.
 ExecStart=/usr/lib/novadeck/sunshine-start
 
 # The mDNS advert, up once the port is and gone with the service. '+' because registering a service
-# with resolved wants root, which only these two commands get; '-' because it must never decide
+# with resolved wants root, which only these and the /dev/uhid lines get; '-' because it must never decide
 # whether hosting starts or stops. ExecStopPost runs however Sunshine ends, except when systemd
 # restarts it after a crash: the next start then clears the old advert itself.
 ExecStartPost=-+/usr/lib/novadeck/sunshine-advert start
 ExecStopPost=-+/usr/lib/novadeck/sunshine-advert stop
+ExecStopPost=-+/usr/bin/setfacl -x u:deck /dev/uhid
 
 # A crash while the user has hosting on should not end it. A clean stop is not a failure.
 Restart=on-failure

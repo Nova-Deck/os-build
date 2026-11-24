@@ -56,6 +56,24 @@ check "runs as deck" "$(unitkey User)" deck
 check "ambient capability is CAP_SYS_ADMIN alone" "$(unitkey AmbientCapabilities)" CAP_SYS_ADMIN
 check "bounding set is CAP_SYS_ADMIN alone" "$(unitkey CapabilityBoundingSet)" CAP_SYS_ADMIN
 check "no new privileges" "$(unitkey NoNewPrivileges)" yes
+# What CAP_SYS_ADMIN would open to whoever gets code to run in here, none of which capture or encoding uses.
+check "no namespaces" "$(unitkey RestrictNamespaces)" yes
+for call in bpf perf_event_open fanotify_init unshare setns @mount @keyring @swap; do
+    check "$call is refused" "$(unitkey SystemCallFilter | grep -cE "^~(.* )?$call( |\$)")" 1
+done
+check "refused with an error, not by killing the host" "$(unitkey SystemCallErrorNumber)" EPERM
+# Refusing capset too would take down the capture thread, which raises its own capability.
+check "the filter is a list of what is refused" "$(grep -c '^SystemCallFilter=[^~]' "$UNIT")" 0
+check "Sunshine may still change its own capabilities" "$(unitkey SystemCallFilter | grep -cE '@privileged|capset')" 0
+check "and nothing runs as root but the guest pads' device and the advert" \
+    "$(grep -E '^Exec[A-Za-z]*=[-:!@]*\+' "$UNIT" | sed -E 's/^Exec[A-Za-z]*=[-:!@]*\+//' | sort | tr '\n' '|')" \
+    "/usr/bin/setfacl -m u:deck:rw /dev/uhid|/usr/bin/setfacl -x u:deck /dev/uhid|/usr/lib/novadeck/sunshine-advert start|/usr/lib/novadeck/sunshine-advert stop|"
+# The package opens /dev/uhid to the whole session at every boot; only a host needs it, for its guests' pads.
+UHID="$OVL/usr/lib/udev/rules.d/71-novadeck-uhid.rules"
+check "after the package's rule, and before the one that acts on uaccess" "$(printf '%s\n' 60-sunshine.rules "$(basename "$UHID")" 73-seat-late.rules | sort -c 2>&1)" ""
+check "uhid is closed while nobody hosts" "$(grep -E '^[^#]' "$UHID" 2>/dev/null)" 'KERNEL=="uhid", GROUP="root", MODE="0600", TAG-="uaccess"'
+check "opened before Sunshine starts, and the start fails if it cannot be" "$(unitkey ExecStartPre | head -1)" "+/usr/bin/setfacl -m u:deck:rw /dev/uhid"
+check "closed again however Sunshine ends" "$(unitkey ExecStopPost | grep -c '^-+/usr/bin/setfacl -x u:deck /dev/uhid$')" 1
 # No file capability on the binary either: rootfs/guard-rootfs.sh checks the built tree for that.
 check "the VA driver is named" "$(grep -c '^Environment=.*LIBVA_DRIVER_NAME=qcom' "$UNIT")" 1
 check "pulse is reachable" "$(grep -c '^Environment=.*XDG_RUNTIME_DIR=/run/user/1000' "$UNIT")" 1
@@ -75,8 +93,15 @@ check "the patch that reads that option is in the package" \
     "$(grep -lE '^\+.*"keep_host_audio"' "$ROOT"/packages/sunshine/patches/*.patch | wc -l)" 1
 check "the pin applies that patch" \
     "$(grep -c "^patches:.*$(basename "$(grep -lE '^\+.*"keep_host_audio"' "$ROOT"/packages/sunshine/patches/*.patch)")" "$ROOT/packages/sunshine/source.pin")" 1
+# Upstream, a stream belongs to whoever was verified last on ANY connection, so a guest could be streaming under
+# another guest's name, where Disconnect misses them.
+client_patch="$(grep -lE '^\+.*launch_session->client_cert = client\.cert' "$ROOT"/packages/sunshine/patches/*.patch)"
+check "a stream belongs to the guest whose connection asked for it" "$(grep -c . <<<"$client_patch")" 1
+check "launch and resume both" "$(grep -cE '^\+.*make_launch_session\(host_audio, args, client_of\(request\)\)' "$client_patch")" 2
+check "the pin applies that patch before the one for Quit, which needs it" \
+    "$(grep -oE '000[45]-nvhttp-[a-z]+' "$ROOT/packages/sunshine/source.pin" | tr '\n' ' ')" "0004-nvhttp-take 0005-nvhttp-a "
 # Upstream, any guest's Quit ends every guest's stream.
-quit_patch="$(grep -lE '^\+.*terminate_sessions_by_cert\(last_verified_client_cert\)' "$ROOT"/packages/sunshine/patches/*.patch)"
+quit_patch="$(grep -lE '^\+.*terminate_sessions_by_cert\(client_of\(request\)\.cert\)' "$ROOT"/packages/sunshine/patches/*.patch)"
 check "a guest's quit ends that guest's stream first" "$(grep -c . <<<"$quit_patch")" 1
 check "and everything only when no stream is left" "$(grep -cE '^\+.*session_count\(\) > 0' "$quit_patch")" 1
 check "the pin applies that patch too" "$(grep -c "^patches:.*$(basename "$quit_patch")" "$ROOT/packages/sunshine/source.pin")" 1
@@ -93,7 +118,7 @@ check "the app list offers the whole session and runs no command" \
 
 echo "4. the unit, the config and the helper agree"
 check "the unit starts Sunshine through the name helper" "$(unitkey ExecStart)" "/usr/lib/novadeck/sunshine-start"
-check "credentials are made before the port opens" "$(unitkey ExecStartPre)" /usr/lib/novadeck/sunshine-creds
+check "credentials are made before the port opens" "$(unitkey ExecStartPre | tail -1)" /usr/lib/novadeck/sunshine-creds
 [[ -x $CREDS ]] && ok "the helper is executable" || bad "the helper is not executable"
 
 echo "4b. the host's name"
@@ -148,7 +173,7 @@ ADVERT="$OVL/usr/lib/novadeck/sunshine-advert"
 # '+': registering wants root (polkit), and the service is deck. '-': an advert is a convenience, and
 # must never decide whether hosting starts or stops.
 check "the unit publishes once Sunshine runs, as root, and never fails over it" "$(unitkey ExecStartPost)" "-+/usr/lib/novadeck/sunshine-advert start"
-check "and withdraws however Sunshine ends" "$(unitkey ExecStopPost)" "-+/usr/lib/novadeck/sunshine-advert stop"
+check "and withdraws however Sunshine ends" "$(unitkey ExecStopPost | head -1)" "-+/usr/lib/novadeck/sunshine-advert stop"
 check "the responder is systemd-resolved" "$(unitkey Wants)" systemd-resolved.service
 cat >"$TMP/bin/busctl" <<'STUB'
 #!/usr/bin/env bash

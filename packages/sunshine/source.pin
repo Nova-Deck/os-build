@@ -11,9 +11,11 @@
 #         as 270 (Steam Deck) already did; it was cropped to its left square. To offer upstream.
 #   0003  keep_host_audio: the host's sound survives a client that asks to mute it (Moonlight's
 #         default). Off unless sunshine.conf turns it on, and ours does.
-#   0004  A client's quit ends that client's stream and gamepads, not every client's; the app and the
+#   0004  A stream belongs to the client whose connection asked for it, not to the last one verified on
+#         any connection, so disabling a client ends its own stream. To offer upstream.
+#   0005  A client's quit ends that client's stream and gamepads, not every client's; the app and the
 #         rest go when no stream is left. One guest leaving must not end the game for the others.
 name: sunshine
 pkgbuild_local: PKGBUILD
 pkgrel_suffix: 1
-patches: 0001-kmsgrab-capture-each-output-s-bottom-plane.patch 0002-kmsgrab-swap-the-output-s-sides-for-a-90-degree-pane.patch 0003-audio-let-the-host-refuse-to-be-muted-by-a-client.patch 0004-nvhttp-a-client-s-quit-ends-its-own-stream-not-every.patch
+patches: 0001-kmsgrab-capture-each-output-s-bottom-plane.patch 0002-kmsgrab-swap-the-output-s-sides-for-a-90-degree-pane.patch 0003-audio-let-the-host-refuse-to-be-muted-by-a-client.patch 0004-nvhttp-take-the-client-from-the-request-s-own-connec.patch 0005-nvhttp-a-client-s-quit-ends-its-own-stream-not-every.patch

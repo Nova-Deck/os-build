@@ -326,7 +326,8 @@ BOOTSTRAP_PKGS=(base)
 # sunshine: the Moonlight game-stream host (overlay-built, packages/sunshine/). Installed but not
 # started: hosting is the user's choice, through novadeck-sunshine.service, which nothing enables. Its
 # own user unit stays unused (a user manager cannot grant the capability KMS capture needs). It ships
-# a udev rule giving group `input` + uaccess on /dev/uinput and /dev/uhid, and loads uhid at boot.
+# a udev rule giving group `input` + uaccess on /dev/uinput and /dev/uhid; 71-novadeck-uhid.rules takes
+# uhid back, and the service opens it while it hosts.
 #
 # moonlight-qt: the Moonlight client (overlay-built, packages/moonlight-qt/). Its hardware decode needs
 # LIBVA_DRIVER_NAME=qcom, which its launcher sets (a Steam tile's launch options), not the image.

@@ -48,7 +48,8 @@ function PinDialog({ pending, onState, closeModal }: Props) {
         <div style={{ marginBottom: "12px" }}>
           {/* By address, which Sunshine measured: every Moonlight sends the same device name. */}
           A device at <b>{pending.address || "an unknown address"}</b> asks to join. Type the PIN its Moonlight shows,
-          only if you know who it is. A paired guest controls this device like a second controller, Steam&apos;s menus included.
+          only if you know who it is. A paired guest controls this device like a second controller, Steam&apos;s menus included:
+          they can run programs on it.
         </div>
         <TextField
           label="PIN"

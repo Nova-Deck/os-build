@@ -13,7 +13,7 @@ const POLL_MS = 2000;
 let lastState: State | null = null;
 
 const HOSTING: Record<State["hosting"], string> = {
-  on: "Friends can join with Moonlight",
+  on: "Friends can join with Moonlight. Any device on this network can ask to join; you let it in with its PIN",
   off: "Off. It never starts by itself",
   starting: "Starting…",
   stopping: "Stopping…",
@@ -115,7 +115,7 @@ export function Content() {
           <PanelSectionRow>
             <Field
               label={state.streaming === 0 ? "Nobody is streaming" : state.streaming === 1 ? "1 guest is streaming" : `${state.streaming} guests are streaming`}
-              description="Guests control this device like a second controller, Steam's menus included."
+              description="Guests control this device like a second controller, Steam's menus included: they can run programs on it."
             />
           </PanelSectionRow>
         )}

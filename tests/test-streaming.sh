@@ -206,7 +206,14 @@ check("pid 0 is no process", sessions.count(0, P("proc")), 0)
 check("children never inherit PyInstaller's library path", [k for k in unit.clean_env({"LD_LIBRARY_PATH": "/x", "A": "1"}) if k == "LD_LIBRARY_PATH"], [])
 
 # -- joining: discovery
-from novadeck_streaming import join, hosts
+from novadeck_streaming import join, hosts, user
+class Deck: pw_uid = 1234; pw_gid = 1235; pw_dir = "/home/x"
+real_account, user.account = user.account, lambda: Deck
+pre = user.prefix(); user.account = real_account
+check("joining runs as the session user, by uid and gid", pre[:3], ["/usr/bin/setpriv", "--reuid=1234", "--regid=1235"])
+check("with nothing left of root: groups, privileges, capabilities", [a for a in ("--init-groups", "--no-new-privs", "--inh-caps=-all", "--bounding-set=-all") if a not in pre], [])
+check("and an environment of its own", (pre[pre.index("-i") - 1], [a for a in pre if a.startswith(("HOME=", "PATH="))]), ("/usr/bin/env", ["HOME=/home/x", "PATH=/usr/bin"]))
+check("that is what discovery, pairing and the saved list use", [m.as_user is user.prefix for m in (join, hosts)], [True, True])
 line = lambda *e: json.dumps({"browserServiceData": [{"updateFlag": f, "family": 2, "name": n, "type": "_nvstream._tcp", "domain": "local", "ifindex": 2} for f, n in e]})
 check("browsing keeps what is there at the end", join.parse_browse("\n".join([line(("added", "a"), ("added", "b")), line(("removed", "a")), "junk", "[]", ""])), ["b"])
 check("a name that is not an instance is dropped", join.parse_browse(line(("added", "x" * 64), ("added", "a\nb"), ("added", ""), ("added", "--address=unixexec:path=/bin/sh"), ("added", "-h"))), [])
@@ -403,8 +410,11 @@ check_flow=$(grep -ohE 'flow-children="[^"]*"' "$SRC"/*.tsx | sort -u | grep -vE
 grep -q 'pending\.address' "$SRC/PinDialog.tsx" && ! grep -qE '\b(pending|p)\.name' "$SRC/PinDialog.tsx" "$SRC/Content.tsx" \
     && ok "a guest who asks is identified by address, never by a name they send" || bad "a screen shows the name a guest sent"
 grep -q 'setInterval' "$SRC"/*.tsx && bad "polls can overlap (setInterval)" || ok "the next poll waits for the last one"
-grep -q 'menus included' "$SRC/Content.tsx" && grep -q 'menus included' "$SRC/PinDialog.tsx" \
-    && ok "both screens say guests reach the menus" || bad "a screen no longer says guests reach the menus"
+for screen in Content PinDialog; do
+    grep -q 'menus included' "$SRC/$screen.tsx" && grep -q 'run programs' "$SRC/$screen.tsx" \
+        && ok "$screen says guests reach the menus, and can run programs from there" || bad "$screen understates what a guest can do"
+done
+grep -qE 'on: ".*network can ask to join' "$SRC/Content.tsx" && ok "the panel says who can ask to join: the whole network" || bad "the panel does not say that the whole network can ask to join"
 # The found list outlives a Forget and a join: what is in the library is read from the hosts shown below it.
 grep -q 'hosts?.hosts.some((t) => t.uuid === h.uuid)' "$SRC/JoinSection.tsx" && ! grep -rqE '\bjoined\b' "$SRC" \
     && ok "a found host is marked from the hosts we have now" || bad "a found host keeps the mark it had when it was found"

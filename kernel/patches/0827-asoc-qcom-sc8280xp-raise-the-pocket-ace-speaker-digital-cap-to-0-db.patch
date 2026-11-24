@@ -1,0 +1,51 @@
+From: Philippe Simons <simons.philippe@gmail.com>
+Subject: [PATCH] ASoC: qcom: sc8280xp: raise the Pocket ACE speaker digital cap to 0 dB
+
+The machine driver limits the WSA digital volume to -3 dB and the PA
+volume to 0 dB on every board, "until we have active speaker
+protection". On the Pocket ACE that leaves the speakers too quiet with
+the slider at the top: both controls sit at their limits, and the amps
+run at 0 dB fixed gain (DRE_CTL_1 0x1d: CSR_GAIN_EN set, gain code 14).
+
+Let the ACE reach 84, which is 0 dB. That is unity, so it cannot clip
+the signal, and it is the control's register default, so no UCM change
+is needed. The PA limit stays at 0 dB and every other board keeps -3 dB.
+
+The speakers see +3 dB, twice the power at peaks, and still have no
+active protection.
+
+Signed-off-by: Philippe Simons <simons.philippe@gmail.com>
+---
+ sound/soc/qcom/sc8280xp.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/sound/soc/qcom/sc8280xp.c b/sound/soc/qcom/sc8280xp.c
+index 4bebc51..f62a999 100644
+--- a/sound/soc/qcom/sc8280xp.c
++++ b/sound/soc/qcom/sc8280xp.c
+@@ -179,6 +179,7 @@ static int sc8280xp_snd_init(struct snd_soc_pcm_runtime *rtd)
+ 	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
+ 	struct snd_soc_card *card = rtd->card;
+ 	struct snd_soc_jack *dp_jack  = NULL;
++	int wsa_digital_max = 81;
+ 	int dp_pcm_id = 0;
+ 
+ 	switch (cpu_dai->id) {
+@@ -188,9 +189,15 @@ static int sc8280xp_snd_init(struct snd_soc_pcm_runtime *rtd)
+ 		 * Set limit of -3 dB on Digital Volume and 0 dB on PA Volume
+ 		 * to reduce the risk of speaker damage until we have active
+ 		 * speaker protection in place.
++		 *
++		 * The Pocket ACE speakers are too quiet at that limit, so
++		 * allow 0 dB of Digital Volume (unity) there.
+ 		 */
+-		snd_soc_limit_volume(card, "WSA_RX0 Digital Volume", 81);
+-		snd_soc_limit_volume(card, "WSA_RX1 Digital Volume", 81);
++		if (of_machine_is_compatible("ayaneo,pocketace"))
++			wsa_digital_max = 84;
++
++		snd_soc_limit_volume(card, "WSA_RX0 Digital Volume", wsa_digital_max);
++		snd_soc_limit_volume(card, "WSA_RX1 Digital Volume", wsa_digital_max);
+ 		snd_soc_limit_volume(card, "SpkrLeft PA Volume", 17);
+ 		snd_soc_limit_volume(card, "SpkrRight PA Volume", 17);
+ 		break;

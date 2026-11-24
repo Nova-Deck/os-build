@@ -80,6 +80,28 @@ mk_proc 1500 reaper      ""          300 'STEAM_COMPAT_APP_ID=990\0'
 mk_proc 1600 python3     ""          400 'STEAM_COMPAT_APP_ID=0\0'
 mk_proc 2000 gamescope   "2100"      50
 mk_proc 2100 steamcompmgr ""         60
+# A Proton launch and a native one, as they look while the game runs. Not children of steam(1234):
+# the pin tests hand apply_game_tree the pids themselves.
+mk_launch() { # pid comm argv maps
+  mk_proc "$1" "$2" "" 500
+  printf '%b' "$3" > "$PROC/$1/cmdline"
+  printf '%b' "$4" > "$PROC/$1/maps"
+}
+PROTON_ARGV='/opt/reaper\0SteamLaunch\0AppId=77\0--\0/opt/GE Proton/proton\0waitforexitandrun\0/g/game.exe\0'
+WINE_LIB='7f0000000000-7f0000100000 r-xp 00000000 08:01 11 /opt/GE Proton/files/lib/wine'
+mk_launch 3000 reaper      "$PROTON_ARGV" '7f00-7f10 r-xp 00000000 08:01 10 /usr/lib/libc.so.6\n'
+mk_launch 3010 python3     'python3\0/opt/GE Proton/proton\0waitforexitandrun\0/g/game.exe\0' ''
+mk_launch 3020 wineserver  '/opt/GE Proton/files/bin/wineserver\0' ''
+mk_launch 3025 FEX         '/usr/bin/FEX\0/opt/GE Proton/files/bin/wineserver\0' ''
+mk_launch 3026 sh          '/bin/sh\0-c\0/opt/GE Proton/files/bin/wineserver\0' ''
+mk_launch 3027 pv-adverb   '/usr/bin/pv-adverb\0--\0/opt/GE Proton/files/bin/wineserver\0' ''
+mk_launch 3028 run         '/opt/wineserver-tools/run\0' ''
+# Mid-start: the unix half is loaded, wineserver has not been told about the process yet.
+mk_launch 3030 wine        'wine\0c:\\\\windows\\\\system32\\\\steam.exe\0' "$WINE_LIB/aarch64-unix/ntdll.so\n"
+mk_launch 3040 game.exe    'Z:\\\\g\\\\game.exe\0' "$WINE_LIB/aarch64-unix/ntdll.so\n$WINE_LIB/aarch64-windows/ntdll.dll\n"
+mk_launch 3100 reaper      '/opt/reaper\0SteamLaunch\0AppId=78\0--\0/g/native-proton/game\0run\0' ''
+# Launch options go through `sh -c`, which carries the whole command as one quoted argument.
+mk_launch 3200 sh          "/bin/sh\0-c\0FOO=1 '/opt/GE Proton/proton' waitforexitandrun '/g/game.exe'\0" ''
 # steam on a kernel WITHOUT CONFIG_PROC_CHILDREN: task dir exists, no children file
 PROCNC="$TMP/proc-nochildren"
 mkdir -p "$PROCNC/9000/task/9000"
@@ -97,10 +119,10 @@ cat > "$TMP/tweaks.json" <<'EOF'
 }
 EOF
 
-NOVADECK_PERF_SYSCPU="$SYS" NOVADECK_PERF_PROC="$PROC" \
+NOVADECK_PERF_SYSCPU="$SYS" NOVADECK_PERF_PROC="$PROC" NOVADECK_CGROUP_ROOT="$TMP/cgroup" \
 TEST_TMP="$TMP" PERF_DIR="$PERF_DIR" ROOT_DIR="$ROOT" SYSU="$SYSU" SYST="$SYST" PROCNC="$PROCNC" \
 python3 - <<'PYEOF'
-import os, pathlib, sys
+import os, pathlib, shutil, sys
 
 sys.path.insert(0, os.environ["PERF_DIR"])
 import novadeck_perf as np
@@ -385,6 +407,205 @@ check("a newborn thread's OWN nice is restored, not flattened", applied.get(newt
 applied.pop(newtid, None); masks.pop(newtid, None)
 pinned.clear()
 
+# wineTopology false: wineserver records the mask of any Wine process without a Wine parent, and
+# every child inherits that record. So the launch chain is never pinned (the first Wine process
+# inherits its mask), and a Wine process is pinned only once it has registered. wineserver itself is
+# pinned: it records its clients' masks, never its own, and no Wine process inherits from it.
+PROTON_TREE = [3000, 3010, 3020, 3030, 3040]
+KEEP_TOPOLOGY = {"cores": [2, 3], "wineTopology": False}
+def fresh_state():
+    return {"affinity": {}, "nice": {}, "baseline": {}}
+def pinned_pids(values, pids, state):
+    pinned.clear()
+    np.apply_game_tree(values, pids, state)
+    return sorted(tid for tid, _mask in pinned)
+
+check("sanitize carries wineTopology false with cores",
+      np.sanitize_perf({"cores": "2,3", "wineTopology": False}), KEEP_TOPOLOGY)
+check("sanitize drops wineTopology with nothing to pin",
+      np.sanitize_perf({"wineTopology": False}), {})
+check("sanitize drops the default", np.sanitize_perf({"cores": "2,3", "wineTopology": True}),
+      {"cores": [2, 3]})
+
+check("the default pins the whole Proton tree",
+      pinned_pids({"cores": [2, 3]}, PROTON_TREE, fresh_state()), PROTON_TREE)
+check("wineTopology false pins only registered Wine processes and wineserver",
+      pinned_pids(KEEP_TOPOLOGY, PROTON_TREE, fresh_state()), [3020, 3040])
+check("...wineserver under an interpreter too",
+      pinned_pids(KEEP_TOPOLOGY, [3000, 3025], fresh_state()), [3025])
+check("...but not a launch chain that only names it",
+      pinned_pids(KEEP_TOPOLOGY, [3000, 3026, 3027, 3028], fresh_state()), [])
+check("...and nothing before Wine exists",
+      pinned_pids(KEEP_TOPOLOGY, [3000, 3010], fresh_state()), [])
+check("...nor when Steam ran the launch through sh -c",
+      pinned_pids(KEEP_TOPOLOGY, [3200], fresh_state()), [])
+check("a native game is pinned at once", pinned_pids(KEEP_TOPOLOGY, [3100], fresh_state()), [3100])
+check("a tree with no readable argv is pinned at once",
+      pinned_pids(KEEP_TOPOLOGY, [1500], fresh_state()), [1500])
+
+# The process that was mid-start registers: the next tick pins it, and repair puts its own mask back.
+late = fresh_state()
+pinned_pids(KEEP_TOPOLOGY, PROTON_TREE, late)
+maps_3030 = np.PROC_ROOT / "3030" / "maps"
+before = maps_3030.read_text()
+maps_3030.write_text(before + (np.PROC_ROOT / "3040" / "maps").read_text())
+check("a process is pinned on the tick after it registers",
+      pinned_pids(KEEP_TOPOLOGY, PROTON_TREE, late), [3020, 3030, 3040])
+check("its own mask is what repair will restore",
+      sorted(late["affinity"][3030]), [0, 1, 2, 3, 4, 5, 6, 7])
+# Registering is one-way, and a loaded game's maps are large: a known process is not read again.
+real_read, maps_read = np._read_proc, []
+np._read_proc = lambda pid, name: (maps_read.append(pid) if name == "maps" else None) or real_read(pid, name)
+check("a registered process stays pinned", pinned_pids(KEEP_TOPOLOGY, PROTON_TREE, late), [3020, 3030, 3040])
+check("...without its maps being read again", sorted(maps_read), [3000, 3010])
+np._read_proc = real_read
+maps_3030.write_text(before)
+pinned_pids(KEEP_TOPOLOGY, [3000], late)
+check("an exited process is forgotten", sorted(late["wine"]), [])
+# Its pid may come back as another game's launch chain, which must not count as registered.
+pinned_pids(KEEP_TOPOLOGY, PROTON_TREE, late)
+pinned_pids({}, [], late)
+check("every process is forgotten when the game exits", late.get("wine"), None)
+check("removing the tweak repairs the pinned processes only",
+      (pinned_pids(KEEP_TOPOLOGY, PROTON_TREE, late), pinned_pids({}, PROTON_TREE, late)),
+      ([3020, 3040], [3020, 3040]))
+# Those pins are the fallback. With a cpuset to be had, it holds the same processes and no thread
+# is pinned one by one.
+class FakeCpuset:
+    def __init__(self, works=True):
+        self.works, self.calls = works, []
+    def hold(self, cpulist, pids):
+        self.calls.append((cpulist, sorted(pids)))
+        return self.works
+    def release(self):
+        self.calls.append("release")
+
+held = {**fresh_state(), "cpuset": FakeCpuset()}
+check("a cpuset replaces the thread pins", pinned_pids(KEEP_TOPOLOGY, PROTON_TREE, held), [])
+check("it holds the registered processes and wineserver", held["cpuset"].calls, [("2-3", [3020, 3040])])
+check("turning the topology back on releases it and pins the tree",
+      (pinned_pids({"cores": [2, 3]}, PROTON_TREE, held), held["cpuset"].calls[-1]),
+      (PROTON_TREE, "release"))
+check("...and off again hands those threads back",
+      (pinned_pids(KEEP_TOPOLOGY, PROTON_TREE, held), held["cpuset"].calls[-1], held["affinity"]),
+      (PROTON_TREE, ("2-3", [3020, 3040]), {}))
+np.apply_game_tree({}, PROTON_TREE, held)
+check("removing the tweak releases it", held["cpuset"].calls[-1], "release")
+np.apply_game_tree(KEEP_TOPOLOGY, PROTON_TREE, held)
+np.apply_game_tree({}, [], held)
+check("the game exiting releases it", held["cpuset"].calls[-1], "release")
+early = {**fresh_state(), "cpuset": FakeCpuset()}
+check("before Wine exists nothing is held", (pinned_pids(KEEP_TOPOLOGY, [3000, 3010], early),
+      early["cpuset"].calls), ([], ["release"]))
+broken = {**fresh_state(), "cpuset": FakeCpuset(works=False)}
+check("no cpuset: the thread pin stands in", pinned_pids(KEEP_TOPOLOGY, PROTON_TREE, broken), [3020, 3040])
+native = {**fresh_state(), "cpuset": FakeCpuset()}
+check("a native game never uses the cpuset",
+      (pinned_pids(KEEP_TOPOLOGY, [3100], native), native["cpuset"].calls), ([3100], ["release"]))
+check("the daemon's own state carries one",
+      type(np.Enforcer().game_state["cpuset"]).__name__, "GameCpuset")
+
+# The cpuset itself, against a fake cgroupfs that moves processes the way the kernel does.
+import novadeck_cpuset as nc
+REL = "/user.slice/user-1000.slice/session-3.scope"
+nc.CGROUP_ROOT, nc.PROC_ROOT = tmp / "cgroup", tmp / "cgproc"
+class FakeKernel:
+    def __init__(self, controllers, where):
+        self.where, self.gone, self.forks, self.writes = dict(where), set(), [], []
+        self.scope = nc.CGROUP_ROOT / REL[1:]
+        shutil.rmtree(nc.CGROUP_ROOT, ignore_errors=True)
+        self.scope.mkdir(parents=True)
+        for name, text in (("cgroup.controllers", controllers), ("cgroup.subtree_control", "")):
+            (self.scope / name).write_text(text)
+    def read(self, path):
+        if path.name == "cgroup":
+            pid = int(path.parent.name)
+            if pid not in self.where:
+                raise FileNotFoundError
+            return f"0::{self.where[pid]}\n"
+        if path.name == "cgroup.procs":
+            rel = "/" + str(path.parent.relative_to(nc.CGROUP_ROOT))
+            return "".join(f"{p}\n" for p, w in self.where.items() if w == rel)
+        return path.read_text() if path.exists() else ""
+    def write(self, path, text):
+        self.writes.append((path.parent.name, path.name, text))
+        if path.name == "cgroup.procs":
+            if int(text) in self.gone:
+                self.where.pop(int(text), None)
+                raise ProcessLookupError
+            self.where[int(text)] = "/" + str(path.parent.relative_to(nc.CGROUP_ROOT))
+            if self.forks:
+                self.where[self.forks.pop()] = REL
+            return
+        if path.name == "cgroup.subtree_control":
+            if REL in self.where.values():
+                raise OSError(16, "Device or resource busy")
+            text = "cpuset"
+        path.write_text(text)
+def boot(controllers="cpuset cpu memory pids", where=None):
+    kernel = FakeKernel(controllers, where or {10: REL, 11: REL, 12: REL})
+    nc._read, nc._write = kernel.read, kernel.write
+    return kernel, nc.GameCpuset()
+in_main, in_game = f"{REL}/novadeck-main", f"{REL}/novadeck-game"
+
+k, c = boot()
+check("hold succeeds", c.hold("2-3", [12]), True)
+check("the game is held and the rest of the session is not", k.where,
+      {10: in_main, 11: in_main, 12: in_game})
+check("the pin is set before the game moves in",
+      k.writes.index(("novadeck-game", "cpuset.cpus", "2-3"))
+      < k.writes.index(("novadeck-game", "cgroup.procs", "12")), True)
+k.writes.clear()
+check("a hold already in force writes nothing", (c.hold("2-3", [12]), k.writes), (True, []))
+check("changed cores are one write", (c.hold("6-7", [12]), k.writes),
+      (True, [("novadeck-game", "cpuset.cpus", "6-7")]))
+k.where[13] = in_main
+c.hold("6-7", [12, 13])
+check("a process that registers later joins", k.where[13], in_game)
+c.release()
+check("release lifts the restriction", k.writes[-1], ("novadeck-game", "cpuset.cpus", "\n"))
+k.writes.clear()
+c.release()
+check("a second release writes nothing", k.writes, [])
+check("a released cgroup is held again", (c.hold("2-3", [12]), k.where[12]), (True, in_game))
+restarted = nc.GameCpuset()
+restarted.release()
+check("a restarted daemon lifts what the previous one set",
+      nc._read(k.scope / "novadeck-game" / "cpuset.cpus"), "\n")
+shutil.rmtree(nc.CGROUP_ROOT)
+check("releasing after the session ended does not raise", c.release(), None)
+k, c = boot()
+c.hold("2-3", [12])
+nc._write = lambda path, text: (_ for _ in ()).throw(OSError(19, "No such device"))
+check("...nor when it ends during the release", c.release(), None)
+
+k, c = boot(controllers="cpu memory pids")
+check("no delegation: refused, and nothing is touched",
+      (c.hold("2-3", [12]), k.writes, sorted(p.name for p in k.scope.iterdir())),
+      (False, [], ["cgroup.controllers", "cgroup.subtree_control"]))
+k, c = boot(); k.forks = [20, 21]
+check("processes born while the session is moved are moved too",
+      (c.hold("2-3", [12]), k.where[20], k.where[21]), (True, in_main, in_main))
+k, c = boot(); k.forks = list(range(30, 200))
+check("a session that will not drain is refused", c.hold("2-3", [12]), False)
+k.forks = []
+check("...and held on a later tick", (c.hold("2-3", [12]), k.where[12]), (True, in_game))
+k, c = boot(); k.gone = {11, 12}
+check("a process that exits while being moved is skipped", (c.hold("2-3", [12]), k.where), (True, {10: in_main}))
+k, c = boot(where={10: REL, 12: "/user.slice/user-1000.slice/user@1000.service/app.slice/x.scope"})
+check("a game outside a login session is refused", (c.hold("2-3", [12]), k.writes), (False, []))
+k, c = boot(where={10: REL, 12: REL, 13: "/user.slice/user-1000.slice/user@1000.service/app.slice/x.scope"})
+check("a game partly outside the session is refused whole", (c.hold("2-3", [12, 13]), k.writes), (False, []))
+k, c = boot()
+check("an exited process does not refuse the rest", (c.hold("2-3", [12, 99]), k.where[12]), (True, in_game))
+k, c = boot()
+check("a game that has exited is refused", (c.hold("2-3", [99]), k.writes), (False, []))
+
+nice_state = fresh_state()
+np.apply_game_tree({**KEEP_TOPOLOGY, "nice": -3}, PROTON_TREE, nice_state)
+check("nice still reaches the whole tree", sorted(nice_state["nice"]), PROTON_TREE)
+np.apply_game_tree({}, PROTON_TREE, nice_state)
+
 pinned.clear()
 np.apply_game_tree({}, [1500], state)
 check("unconfigured tree is never written", pinned, [])
@@ -457,9 +678,46 @@ check("topology derived from cores, under both names", topology(), ("2:2,3", "2:
 check("per-game env applied", os.environ.get("DXVK_HUD"), "fps")
 check("null env entry unsets", "TOMBSTONE_ME" in os.environ, False)
 
+# wineTopology false must leave Wine with every CPU. Exporting nothing does not: on aarch64 Proton
+# fills the gap from its own affinity. This is Proton's branch order (both baked Protons), run on
+# what apply_env leaves behind -- `pinned_to` is Proton's own sched_getaffinity.
+def proton_topology(appid, pinned_to, limits={"4000": "4"}, host=8):
+    env = {key: os.environ[key] for key in pw.TOPOLOGY_KEYS if key in os.environ}
+    if "PROTON_CPU_TOPOLOGY" in env:
+        return env["PROTON_CPU_TOPOLOGY"]
+    if appid in limits:
+        return limits[appid]
+    if "WINE_CPU_TOPOLOGY" not in env and len(pinned_to) < host:
+        return f"{len(pinned_to)}:{','.join(map(str, pinned_to))}"
+    return env.get("WINE_CPU_TOPOLOGY")
+
+
 clear_topology()
+check("the trap: no variable at all, and Proton derives from the pin",
+      proton_topology("77", [2, 3]), "2:2,3")
+# A bare count that is not below the host's CPU count is "no override" to Wine, so it stops the
+# derivation without putting an identity mapping in front of the real topology.
 pw.apply_env({"cores": "2,3", "wineTopology": False})
-check("wineTopology false suppresses both", topology(), (None, None))
+check("wineTopology false: Proton does not derive from the pin", proton_topology("77", [2, 3]), "8")
+check("wineTopology false: Proton's own per-title limit still applies",
+      proton_topology("4000", [2, 3]), "4")
+
+clear_topology()
+pw.apply_env({"singleCore": True, "wineTopology": False})
+check("wineTopology false covers singleCore too", topology(), ("8", None))
+
+clear_topology()
+pw.apply_env({"wineTopology": False})
+check("wineTopology false with nothing to pin exports nothing", topology(), (None, None))
+
+clear_topology()
+os.environ["PROTON_CPU_TOPOLOGY"] = "user-set"
+pw.apply_env({"cores": "2,3", "wineTopology": False})
+check("wineTopology false: an inherited value still wins", proton_topology("77", [2, 3]), "user-set")
+
+clear_topology()
+pw.apply_env({"cores": "2,3", "wineTopology": False, "env": {"WINE_CPU_TOPOLOGY": "1:2"}})
+check("wineTopology false: a profile's value still wins", topology(), ("1:2", "1:2"))
 
 clear_topology()
 os.environ["WINE_CPU_TOPOLOGY"] = "user-set"

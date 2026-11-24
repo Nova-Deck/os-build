@@ -209,7 +209,7 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
         {settings.cores || settings.singleCore ? (
           <ToggleRow
             label="Shape Wine CPU topology"
-            description="Wine/Proton reports only the pinned cores. Takes effect on next launch."
+            description="Wine/Proton reports only the pinned cores. Off: the game sees every core but still runs on the pinned ones. Takes effect on next launch."
             value={settings.wineTopology !== false}
             disabled={!gameEnabled}
             onChange={(on) => patch({ wineTopology: on ? undefined : false })}

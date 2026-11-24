@@ -338,8 +338,12 @@ def apply_env(settings):
     affinity pin, so Wine reports the CPUs the game will actually be given rather than the
     machine's full set. It lives here rather than in the daemon because env must exist before
     exec and this is Wine-only — the scheduling half of `cores` is applied post-launch by the
-    daemon, on every launch path (see docs/per-game-perf.md). Set "wineTopology": false to pin
-    without also reshaping what Wine reports.
+    daemon, on every launch path (see docs/per-game-perf.md).
+
+    "wineTopology": false pins without reshaping what Wine reports, and that takes a value too:
+    with nothing set, Proton on aarch64 derives a topology from its own affinity. The value is
+    the bare count of online cpus, which Wine treats as no override. Only the Wine name is set
+    there, so Proton's per-title counts (below) keep applying as they do to an untuned game.
 
     It takes BOTH names. Proton carries a table of titles it gives a fixed core count to, and
     for those it overwrites WINE_CPU_TOPOLOGY with its own value — unconditionally, unless
@@ -354,7 +358,9 @@ def apply_env(settings):
             cores = novadeck_perf.resolve_cores(settings.get("cores"), single=single)
         except ValueError as exc:
             print(f"{PROG}: ignoring bad 'cores' ({exc})", file=sys.stderr)
-    if cores and settings.get("wineTopology") is not False:
+    if cores and settings.get("wineTopology") is False:
+        os.environ.setdefault("WINE_CPU_TOPOLOGY", str(len(novadeck_perf.online_cpus())))
+    elif cores:
         # An inherited value still wins, under either name.
         topology = os.environ.get("PROTON_CPU_TOPOLOGY", os.environ.get(
             "WINE_CPU_TOPOLOGY", f"{len(cores)}:{','.join(map(str, cores))}"))

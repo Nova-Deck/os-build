@@ -40,7 +40,7 @@ The game itself:
 | `cores` | cpulist or preset | pin the game's threads to these CPUs |
 | `singleCore` | bool | narrow `cores` to exactly one CPU — the fastest of those selected |
 | `env` | object | environment variables for the launch (`null` unsets one) — Proton titles only |
-| `wineTopology` | bool | set `false` to pin via `cores` without reshaping what Wine reports (suppresses both topology variables) |
+| `wineTopology` | bool | set `false` to pin via `cores` while the game still sees every CPU — Proton titles only (see below) |
 
 Override of a system-wide setting, per-game only (see below):
 
@@ -98,6 +98,29 @@ those it overwrites `WINE_CPU_TOPOLOGY` with its own value unless `PROTON_CPU_TO
 so the Wine name alone is silently discarded on exactly the games most likely to be re-pinned by
 hand. The two are one setting here, in `env` too: name either and both are written, `null` on
 either unsets the pair, and naming both leaves them verbatim.
+
+`"wineTopology": false` keeps the pin and leaves the game seeing every CPU. Both halves need work,
+because on Proton a pin leaks into what the game sees by two routes:
+
+- **Proton derives a topology from its own affinity** on aarch64 when neither variable is set. So
+  `game-launch` sets `WINE_CPU_TOPOLOGY` to the number of online CPUs, which Wine treats as no
+  override. `PROTON_CPU_TOPOLOGY` stays unset, so Proton's table of fixed core counts applies as it
+  does to an untuned game.
+- **wineserver records the affinity of any Wine process without a Wine parent**, every child
+  inherits that record, and a game cannot set an affinity outside it. So `novadeck-powerd` never
+  pins the launch chain (Proton's python, the runtime container), and pins a Wine process only once
+  it has registered. wineserver is pinned too: it records its clients' masks, never its own. A
+  non-Proton title ignores the key and is pinned at once.
+
+The pin itself is then a **cgroup cpuset**, not an affinity mask. Wine gives every new thread the
+mask it recorded, so an affinity pin would leak each new thread until the next tick. The kernel cuts
+whatever Wine or the game asks for down to the cpuset, for threads that do not exist yet too.
+`novadeck_cpuset.py` has the cgroup layout and why it is that one. It needs `Delegate=cpuset` on the
+session scope, which the image ships; without it `novadeck-powerd` logs that and falls back to the
+affinity pin.
+
+One difference a game can notice: asking for **only** CPUs outside the pin fails, and the thread
+stays where it was. With the default the game cannot see those CPUs to ask for them.
 
 `singleCore` narrows whatever `cores` selected down to **exactly one** CPU: the highest-capacity
 member, ties broken by the lowest CPU number. It is a modifier, not a preset, so the class still
@@ -158,7 +181,8 @@ Games launch three ways — Proton (compat tool), native x86 Linux via the syste
 
 - **Scheduling for the game tree** (`nice`, `cores`) needs no launch hook at all, and is
   enforced post-launch by `novadeck-powerd` on **every** path. Caveat: enforcement lands up to
-  one tick (~3 s) after launch, so the first moments run untuned.
+  one tick (~3 s) after launch, so the first moments run untuned. With `"wineTopology": false` on
+  a Proton title, `cores` waits until Wine has started.
 - **Wine/Proton env** (`env`, the CPU topology from `cores`) must exist before exec, and
   `game-launch` is in the exec chain precisely for this path. Meaningless for non-Wine
   titles, so no coverage gap.

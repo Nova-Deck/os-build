@@ -27,6 +27,9 @@ tree with no root and no device.
 import json
 import os
 import pathlib
+import re
+
+import novadeck_cpuset
 
 TWEAKS_CONFIG = pathlib.Path("/etc/novadeck/game-tweaks.json")
 PROC_ROOT = pathlib.Path(os.environ.get("NOVADECK_PERF_PROC", "/proc"))
@@ -45,6 +48,10 @@ STEAM_COMMS = ("steam",)
 # launches, SteamGameId is the shortcut fallback.
 APPID_ENV_KEYS = ("STEAM_COMPAT_APP_ID", "SteamAppId", "SteamGameId")
 NICE_MIN, NICE_MAX = -20, 19
+# A Proton launch names the script and its verb in the argv of EVERY process of the chain, from
+# Steam's own wrapper on, so it is recognisable before Python or Wine exists. The quote is for
+# launch options, which Steam runs as one `sh -c` string.
+PROTON_LAUNCH = re.compile(rb"/proton['\"]?[\0 ]+(?:waitforexitandrun|runinprefix|run)[\0 ]")
 
 
 # --------------------------------------------------------------- cpulists ---
@@ -223,6 +230,9 @@ def sanitize_perf(settings):
                 clean["cores"] = cores
         except ValueError:
             pass
+    # Only the opt-out means anything here, and only with a pin to time: see pinnable_pids.
+    if "cores" in clean and settings.get("wineTopology") is False:
+        clean["wineTopology"] = False
     if _is_int(settings.get("gamescopeNice")):
         clean["gamescopeNice"] = clamp(settings["gamescopeNice"], NICE_MIN, NICE_MAX)
     if "gamescopeCores" in settings:
@@ -559,6 +569,51 @@ def _remember(store, key, pid, tid, current, enforced, fresh, state):
         store[tid] = state["baseline"][pid][key]
 
 
+def _read_proc(pid, name):
+    try:
+        return (PROC_ROOT / str(pid) / name).read_bytes()
+    except OSError:
+        return b""
+
+
+def keeps_topology(values, pids):
+    """Is this a Proton launch whose `cores` must not show in what the game sees?"""
+    return (values.get("wineTopology") is False
+            and any(PROTON_LAUNCH.search(_read_proc(pid, "cmdline")) for pid in pids))
+
+
+def _is_wineserver(pid):
+    # argv[0], or argv[1] when an x86 one runs under an interpreter.
+    return any(os.path.basename(arg) == b"wineserver"
+               for arg in _read_proc(pid, "cmdline").split(b"\0")[:2])
+
+
+def pinnable_pids(pids, state):
+    """The processes of a keeps_topology() launch that may be pinned now.
+
+    "wineTopology": false promises the game still sees every cpu, and the pin itself can break it.
+    wineserver records the affinity of any Wine process that has no Wine parent, every child
+    inherits the record, and a game cannot set an affinity outside it. So the mask must not be
+    in place when that first process registers — and it inherits its mask from the launch chain
+    (Proton's python, the runtime container). Proton also derives a topology from its own mask.
+
+    Hence: never pin the launch chain, and pin a Wine process only once it has registered. The
+    proof of that is ntdll.dll in its maps. Wine loads it after the request that records the
+    mask, where the unix half (ntdll.so) comes before it. "A wineserver is running" would prove
+    nothing: preparing the prefix starts one of its own, before the game's.
+
+    wineserver itself may be pinned at any time. The masks it records are its clients', never its
+    own, and it starts no Wine process that would inherit one. Left out, it would be the one busy
+    part of the game still running on the cores the user excluded.
+    """
+    # Both are one-way, so a process is looked at only until it qualifies.
+    known = state.get("wine", set()) & set(pids)
+    state["wine"] = known | {pid for pid in pids if pid not in known
+                             and (_is_wineserver(pid)
+                                  or b"/ntdll.dll" in _read_proc(pid, "maps"))}
+    return [pid for pid in pids if pid in state["wine"]]
+
+
 def apply_game_tree(values, pids, state):
     """Apply the game-tree keys (`nice`, `cores`) to every thread of `pids`.
 
@@ -600,8 +655,22 @@ def apply_game_tree(values, pids, state):
         if not mask:  # every requested cpu is offline: not enforceable
             mask = None
 
-    if mask:
-        for pid in pids:
+    # Wine gives every new thread the mask it recorded, which keeps_topology() makes all cpus, so an
+    # affinity pin would leak each thread until the next tick. A cpuset holds them from birth. Where
+    # there is none to be had, the affinity pin is still better than nothing.
+    pin_pids, held = pids, False
+    cpuset = state.get("cpuset")
+    if mask and keeps_topology(values, pids):
+        pin_pids = pinnable_pids(pids, state)
+        if cpuset is not None and pin_pids:
+            held = cpuset.hold(format_cpulist(sorted(mask)), pin_pids)
+    else:
+        state.pop("wine", None)
+    if cpuset is not None and not held:
+        cpuset.release()
+
+    if mask and not held:
+        for pid in pin_pids:
             fresh = pid in fresh_pids
             for tid in tids_by_pid[pid]:
                 if tid not in state["affinity"]:
@@ -651,7 +720,8 @@ class Enforcer:
         self.appid_cache = {}
         # baseline: what each process looked like before we first touched it —
         # the reference for threads spawned while a tweak is in force (_remember)
-        self.game_state = {"affinity": {}, "nice": {}, "baseline": {}}
+        self.game_state = {"affinity": {}, "nice": {}, "baseline": {},
+                           "cpuset": novadeck_cpuset.GameCpuset()}
         # The compositor found by the last tick, None when there is none. powerd
         # reads it to drive gamescope's ConVars without a second /proc walk.
         self.gamescope_pid = None

@@ -133,8 +133,8 @@ comes from `cores` while the count comes from the flag — `"cores": "little"` w
 pins one *little* core, which is all a cheap title needs, while `"all"` pins the prime one.
 Set on its own it narrows every online CPU. It never applies to `gamescopeCores`.
 
-`"cores": "all"` without `singleCore` is no pin. Enforcing it would widen the threads a game pins
-itself, on every tick, and replace Proton's own per-title core counts.
+A selection that resolves to every CPU, like `"all"` on its own, is no pin. Enforcing it would widen
+the threads a game pins itself, on every tick, and replace Proton's own per-title core counts.
 
 **This is the lever for games from roughly the mid-2000s that hang or freeze under load.** Titles
 of that era spin-wait and assume a few identical cores, which this hardware is the opposite of —
@@ -148,10 +148,13 @@ matched top cores it resolves to two CPUs — a one-core workaround that silentl
 two-core pin, bringing the races back with nothing to indicate why. `singleCore` always yields
 one, whatever the topology.
 
-`gamescopeCores` accepts a kernel-style cpulist (`"0,3-5"`) or a named preset: `all`, `little`,
-`big` (everything that is not little, prime included), `prime`. Presets are resolved from the live
-CPU topology (`cpu_capacity`), so they mean the right cores on every supported board. A per-game
-`"gamescopeCores": "all"` explicitly clears a restrictive system-wide pin.
+`cores` and `gamescopeCores` accept a kernel-style cpulist (`"0,3-5"`) or a named preset: `all`,
+`little`, `big` (everything but the little cores, prime included), `prime`. Presets are resolved from
+the live CPU topology (`cpu_capacity`), so they mean the right cores on every supported board. The
+lowest-capacity cluster counts as little cores only up to half the capacity of the top one. The
+SM8750 has none: its lowest cluster is 82% of its top one, so there `big` is every CPU (for a game:
+no pin) and `little` is that cluster, its six slower cores. A per-game `"gamescopeCores": "all"`
+explicitly clears a restrictive system-wide pin.
 
 ## How enforcement works
 

@@ -57,6 +57,13 @@ for c in 0 1; do printf '300\n'  > "$SYST/cpu$c/cpu_capacity"; done
 for c in 2 3; do printf '1024\n' > "$SYST/cpu$c/cpu_capacity"; done
 printf '0-3\n' > "$SYST/online"
 
+# NO-LITTLE variant, the SM8750 (6x836 + 2x1024): the lowest cluster is most of the top one.
+SYSE="$TMP/sys-cpu-no-little"
+for c in 0 1 2 3 4 5 6 7; do mkdir -p "$SYSE/cpu$c"; done
+for c in 0 1 2 3 4 5; do printf '836\n' > "$SYSE/cpu$c/cpu_capacity"; done
+for c in 6 7; do printf '1024\n' > "$SYSE/cpu$c/cpu_capacity"; done
+printf '0-7\n' > "$SYSE/online"
+
 # --- fabricated /proc: steam(1234) -> reaper(1300, appid 620, older) -> pv(1400, appid 620)
 #     plus a second, NEWER launch chain steam -> reaper(1500, appid 990)
 #     and gamescope(2000) with a non-gamescope child (2100)
@@ -120,7 +127,7 @@ cat > "$TMP/tweaks.json" <<'EOF'
 EOF
 
 NOVADECK_PERF_SYSCPU="$SYS" NOVADECK_PERF_PROC="$PROC" NOVADECK_CGROUP_ROOT="$TMP/cgroup" \
-TEST_TMP="$TMP" PERF_DIR="$PERF_DIR" ROOT_DIR="$ROOT" SYSU="$SYSU" SYST="$SYST" PROCNC="$PROCNC" \
+TEST_TMP="$TMP" PERF_DIR="$PERF_DIR" ROOT_DIR="$ROOT" SYSU="$SYSU" SYST="$SYST" SYSE="$SYSE" PROCNC="$PROCNC" \
 python3 - <<'PYEOF'
 import os, pathlib, shutil, sys
 
@@ -160,6 +167,35 @@ check("uniform capacity collapses", np.preset_cpus("little"), [0, 1, 2, 3])
 check("single on uniform still narrows to one",
       np.resolve_cores("all", single=True), [0])
 np.SYS_CPU_ROOT = pathlib.Path(os.environ["NOVADECK_PERF_SYSCPU"])
+
+# No little cluster (SM8750: 6x836 + 2x1024). The lowest cluster is not little just for being lowest:
+# `big` without it was the two prime cores, and games pinned there broke (#161).
+np.SYS_CPU_ROOT = pathlib.Path(os.environ["SYSE"])
+check("no little cluster: big is every cpu", np.preset_cpus("big"), [0, 1, 2, 3, 4, 5, 6, 7])
+check("no little cluster: prime is still the top class", np.preset_cpus("prime"), [6, 7])
+check("no little cluster: little is the slower class", np.preset_cpus("little"), [0, 1, 2, 3, 4, 5])
+check("no little cluster: a game's big pins nothing", np.game_cores({"cores": "big"}), None)
+check("...nor does it resolve to a pin in the daemon", "cores" in np.sanitize_perf({"cores": "big"}), False)
+check("...big with singleCore is the fastest core", np.game_cores({"cores": "big", "singleCore": True}), [6])
+check("...gamescope's big is every cpu", np.sanitize_perf({"gamescopeCores": "big"})["gamescopeCores"],
+      [0, 1, 2, 3, 4, 5, 6, 7])
+np.SYS_CPU_ROOT = pathlib.Path(os.environ["NOVADECK_PERF_SYSCPU"])
+check("a real little cluster still leaves big", np.game_cores({"cores": "big"}), [2, 3, 4, 5, 6, 7])
+check("an explicit list of every cpu pins nothing", np.game_cores({"cores": "0-7"}), None)
+# The classes the boards we ship report, as cpu: capacity. Measured on an SM8550 and an SM8650.
+def board(caps):
+    real, np.cpu_capacities = np.cpu_capacities, lambda: dict(enumerate(caps))
+    real_online, np.online_cpus = np.online_cpus, lambda: list(range(len(caps)))
+    try:
+        return {name: np.preset_cpus(name) for name in ("little", "big", "prime")}
+    finally:
+        np.cpu_capacities, np.online_cpus = real, real_online
+check("SM8550 presets", board([222] * 3 + [657] * 4 + [1024]),
+      {"little": [0, 1, 2], "big": [3, 4, 5, 6, 7], "prime": [7]})
+check("SM8650 presets", board([216] * 2 + [855] * 3 + [803] * 2 + [1024]),
+      {"little": [0, 1], "big": [2, 3, 4, 5, 6, 7], "prime": [7]})
+check("SM8250 presets", board([250] * 4 + [782] * 3 + [1024]),
+      {"little": [0, 1, 2, 3], "big": [4, 5, 6, 7], "prime": [7]})
 
 # singleCore: a MODIFIER on the selection, never a replacement for it. The class comes from
 # the preset, the count comes from the flag -- so a cheap title can pin one LITTLE core.

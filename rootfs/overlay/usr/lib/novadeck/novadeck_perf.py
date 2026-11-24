@@ -39,6 +39,9 @@ SYS_CPU_ROOT = pathlib.Path(
 # The keys "global" may carry: the compositor runs whether a game does or not.
 SYSTEM_WIDE_KEYS = ("gamescopeNice", "gamescopeCores")
 CORE_PRESETS = ("all", "big", "prime", "little")
+# The lowest-capacity cluster is little cores only up to this share of the top one. It is 21-28% on
+# the SM8250, SM8550 and SM8650, which have them, and 82% on the SM8750, which has none.
+LITTLE_MAX_SHARE = 0.5
 # The CPU schedulers a tweak may select. novadeck-powerd imports this as its own
 # CPU_SCHEDULERS so the D-Bus enum and the tweaks-file domain cannot drift apart.
 # "none" is the stock in-kernel scheduler; "lavd" is scx_lavd via scx.service.
@@ -125,7 +128,9 @@ def preset_cpus(name):
     """Resolve a named core preset against live topology.
 
     little = the lowest-capacity cluster, prime = the highest, big = everything
-    that is not little (mid + prime). Uniform capacity — or no cpu_capacity at
+    that is not little cores (mid + prime). Where the lowest cluster is not
+    little cores (LITTLE_MAX_SHARE), big is every cpu; `little` still names that
+    cluster, as the slower cores there are. Uniform capacity — or no cpu_capacity at
     all (non-DT hosts, the test suite unless it fabricates one) — collapses
     every preset to all online CPUs, which is the only honest answer there.
     """
@@ -140,8 +145,10 @@ def preset_cpus(name):
         keep = {levels[0]}
     elif name == "prime":
         keep = {levels[-1]}
-    else:  # big
+    elif levels[0] <= levels[-1] * LITTLE_MAX_SHARE:  # big
         keep = set(levels[1:])
+    else:
+        keep = set(levels)
     return [c for c in online if caps.get(c) in keep]
 
 
@@ -189,17 +196,18 @@ def resolve_cores(value, single=False):
 def game_cores(settings):
     """The cpus a game's `cores` and `singleCore` pin it to, or None for no pin.
 
-    "all" is no pin: there is nothing for a game to override, and enforcing it
-    would widen the threads a game pins itself, on every tick. With singleCore
-    it still means "the fastest of all of them". ValueError as resolve_cores."""
-    value = settings.get("cores")
+    Every cpu is no pin, whether it was spelled "all" or is what "big" means on
+    this SoC: there is nothing for a game to override, and enforcing it would
+    widen the threads a game pins itself, on every tick. ValueError as
+    resolve_cores."""
     # A MODIFIER on `cores`, and meaningful on its own (it then narrows the full
     # online set). Deliberately NOT applied to gamescopeCores: pinning the
     # compositor to one cpu is never the workaround being asked for.
     single = settings.get("singleCore") is True
-    if value == "all" and not single:
+    cores = resolve_cores(settings.get("cores"), single=single)
+    if cores is None or set(cores) == set(online_cpus()):
         return None
-    return resolve_cores(value, single=single)
+    return cores
 
 
 def clamp(value, low, high):

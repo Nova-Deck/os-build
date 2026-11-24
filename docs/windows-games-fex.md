@@ -26,7 +26,8 @@ on by default and is the largest single cost in the translation. Turning it off 
 performance win available, and also the most likely way to introduce a race-condition crash in a
 game that was relying on x86's ordering.
 
-Two presets are available: `fast` (TSO off) and `compatible` (stricter, slower).
+Three presets are available: `fast` (TSO off), `precise` (full-precision x87 floating point, for old
+games that crash or misbehave without it) and `compatible` (stricter, slower).
 Set one per game by creating `/etc/novadeck/game-tweaks.json`:
 
 ```json

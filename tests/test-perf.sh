@@ -921,9 +921,21 @@ contract = _json.loads(pathlib.Path(profiles_path).read_text())
 profs = contract["profiles"]
 # No "default" preset: it forced the usual values over Steam's own per-title ones, where choosing
 # nothing is what leaves them alone.
-check("the presets are the two that differ from choosing none", sorted(profs), ["compatible", "fast"])
+check("the presets are the ones that differ from choosing none", sorted(profs), ["compatible", "fast", "precise"])
 pw.PROFILES = pathlib.Path(profiles_path)
-check("game-launch accepts the shipped contract", sorted(pw.load_profiles()["profiles"]), ["compatible", "fast"])
+check("game-launch accepts the shipped contract", sorted(pw.load_profiles()["profiles"]),
+      ["compatible", "fast", "precise"])
+# precise is full x87 and NOTHING else: every further key would force a value over Steam's own.
+check("precise is full x87 and nothing else", profs["precise"]["config"], {"X87ReducedPrecision": "0"})
+os.environ.update({"STEAM_FEX_TSOENABLED": "0", "STEAM_COMPAT_FEX_CONFIG": "Multiblock:1,ThunksDB_GL:1"})
+check("precise leaves every choice Steam made for the title alone",
+      _json.loads(pw.write_config({"fexProfile": "precise"}, "200260", profs).read_text()),
+      {"Config": {"TSOEnabled": "0", "Multiblock": "1", "X87ReducedPrecision": "0"}, "ThunksDB": {"GL": 1}})
+for var in ("STEAM_FEX_TSOENABLED", "STEAM_COMPAT_FEX_CONFIG"):
+    os.environ.pop(var)
+check("precise with nothing from Steam writes its one key",
+      _json.loads(pw.write_config({"fexProfile": "precise"}, "200260", profs).read_text()),
+      {"Config": {"X87ReducedPrecision": "0"}})
 check("fast keeps Multiblock on", profs["fast"]["config"]["Multiblock"], "1")
 # The escape hatch: at least one preset must stay conservative, or "try Compatible" stops meaning
 # anything for a title that miscompiles under the aggressive JIT.

@@ -338,7 +338,7 @@ lzo 2.10-5 aarch64 snapshot ff11d9a5060ae28fbece3faad126724314232747cc09b836157f
 mangohud 0.8.4-1.1 aarch64 novadeck 3c872c485b831aba88ef7f31eca2b7cef02378645ea97efcdae6e574d689b05f
 md4c 0.5.3-1 aarch64 snapshot e75e2fdbc9a0ae272bcfced7a27169347d82a06832c4d81fd3a936686881bd36
 mdadm 4.6-2 aarch64 snapshot 9389e0c8957902aa29c3199bb4074dfd1f316411c3371cd759851fabdecd152a
-mesa 1:26.3.1-1.1 aarch64 novadeck fb9e9f89ccbeab85852bcd2e9118c096b78ba6d001d2e7fca82944e62a0de790
+mesa 1:26.3.1-1.1 aarch64 novadeck 34ad3cd12fd491243a49c51a8e1313d05aee5299e91fc3ccca874f3d56967340
 mobile-broadband-provider-info 20251101-1 any snapshot 1b0146d8b72f6ffc3edcccd5709d8de42798c4827a5fccd994c389584d60c56c
 moonlight-qt 6.2.0-1.1 aarch64 novadeck b91826cc7a8d7a10d3f83e3c9d84cb88075796f8859c5b9fb7613b762b262631
 mpdecimal 4.0.1-3 aarch64 snapshot 93a0e16603858a8d78c4ab3a924ff2ccd9554cd2019c1f65d411c5276334cb86
@@ -462,9 +462,9 @@ vapoursynth 77-2 aarch64 snapshot c75c264e639c12b2e4ac4814d3ee01ee1ff9bbef702e67
 vid.stab 1.1.1-3 aarch64 snapshot 365652df78bb762223c107839438dd9c46d13dfd71022d5e6af6edf5f05c2831
 vmaf 3.2.0-1 aarch64 snapshot e93df3579edaa015c8ae9ee8ffd654b3f88ec89deb97e09997828b7dc58441ba
 volume_key 0.3.12-12 aarch64 snapshot 9ffff52f6be0342278fcf4b8071d25634c85c3592bd0ecd4277fad9b5b2ec6df
-vulkan-freedreno 1:26.3.1-1.1 aarch64 novadeck fb9e9f89ccbeab85852bcd2e9118c096b78ba6d001d2e7fca82944e62a0de790
+vulkan-freedreno 1:26.3.1-1.1 aarch64 novadeck 34ad3cd12fd491243a49c51a8e1313d05aee5299e91fc3ccca874f3d56967340
 vulkan-icd-loader 1.4.350.1-1 aarch64 snapshot 9417370c39570768c5b5897de9f573e0ebf1f52bd458cbf8a9e939c4f7cd930b
-vulkan-mesa-layers 1:26.3.1-1.1 aarch64 novadeck fb9e9f89ccbeab85852bcd2e9118c096b78ba6d001d2e7fca82944e62a0de790
+vulkan-mesa-layers 1:26.3.1-1.1 aarch64 novadeck 34ad3cd12fd491243a49c51a8e1313d05aee5299e91fc3ccca874f3d56967340
 vulkan-tools 1.4.350.1-1 aarch64 snapshot 9eb9eb2fe3a45cbb84a4fb3cfe188cb3cfc873b7f8ab5b899ba19c49cf0b939e
 wayland 1.25.0-1 aarch64 snapshot ea612c6392dd9e4c1498b5cfebf28b4508029b9c54a0e47e4c5bd1e1e9e79e0f
 webrtc-audio-processing-1 1.3-5 aarch64 snapshot 22350ba4701c4fb56f354408d24048cd9667aa04cebfc9f883c33a12f8e3f3c5

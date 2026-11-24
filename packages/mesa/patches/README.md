@@ -46,6 +46,18 @@ in the PKGBUILD's `prepare()`.
   **HW check owed:** a GL game with vsync off in its own settings (Half-Life 2) and the QuickAccess
   cap at 30 must hold 30; without the patch it runs uncapped.
 
+- **0006-vulkan-vram-report-limit-scale-heap-usage-with-the-budget.patch** — sunshineinabox
+  (2026-11-24), not posted upstream, body identical. The vram-report-limit layer (`novadeck-steam`
+  turns it on at 4096 MiB for games) scales each heap's budget down with the size it reports, but
+  passed the driver's usage through. A game that compares the two saw its heap too full by the
+  inverse of that ratio: with Turnip's heap at 15/16 of RAM, about 1.7x on an 8 GB board and 3.7x on
+  a 16 GB one. The author's case: Unity stops using a memory type past ~92% of its budget, and
+  Megabonk ran out of memory ~40 s in under a 512 MiB report (6.6x). The usage is now scaled by the
+  same ratio. A game that follows the budget can therefore really use more than the reported size,
+  up to what the system has free. Host and x86 builds; the android build has no such layer.
+
+  **HW check owed:** none of our boards has been measured with or without it.
+
 ## Dropped
 
 - **0001-add-a830-chip-id.patch** — dropped at the 26.3.0 bump. It registered extra Adreno 830

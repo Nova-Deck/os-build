@@ -525,7 +525,14 @@ not a section of an existing panel. Two halves:
       jitter, host 6.0 ms average (19.5 max), network 5 ms, decode 0.44 ms. No game was identified in that figure.
     - Considered and withdrawn (user, 2026-11-24): no tab and no tile per host, everything in the plugin. A stream not
       started by Steam has no gamescope focus or Steam Input (expected, not tried). The tiles and the tab stay.
-    - Owed: that pad, the setpriv prefix, tabs of both stores and Sunshine side by side, a rejoin order with two pads, fps with
+    - **Security review before merge (2026-11-24, read-only, two reviewers), no route in for an unpaired device.** Fixed
+      and built, next card: 0004 (a stream and a Quit belong to the connection that asked), `/dev/uhid` open to deck only
+      while hosting, refused system calls on the unit, texts, the `setpriv` test. `RestrictNamespaces` is documented as
+      not enforced on arm64. Test on the card: the service starts and streams under the filter, a guest's pad, uhid closed
+      after Stop (`getfacl /dev/uhid`), then the three Quit tests again. Accepted: a paired guest can run programs (they
+      have the menus); deck can reach Sunshine's `CAP_SYS_ADMIN` while it hosts, since it can attach to it (no Yama, user,
+      2026-11-24); a Quit while another guest is still starting can end that start.
+    - Owed: that pad, tabs of both stores and Sunshine side by side, a rejoin order with two pads, fps with
       and without hosting in a game that does not hold 60, 0004's two-guest limit (same-instant connections).
 
 - **Duplicate tiles on the user's other devices (user, 2026-11-23; low priority, decide with this step).** Both test

@@ -294,9 +294,6 @@ Current overlay:
   `html-docs=disabled`. LLVM/clang stay on, as upstream. Replaces holo's stale, all-driver
   `mesa`/`vulkan-freedreno`. Carries SM8750 / Adreno a830 enablement patches under
   `packages/mesa/patches/`.
-- `gtk2/` — **local PKGBUILD**: Valve's (Arch's) gtk2 `2.24.33-5` recipe, unchanged, from
-  `mash-20260528.1.pvt`'s `sources/`. The native arm64 Steam client's `steamui.so` links
-  `libgtk-x11-2.0.so.0`, so the base installs it on the host; `mash-20260704` stopped shipping it.
 - `rauc/` — **local PKGBUILD** building rauc `1.15.2` from the upstream release tarball. This is
   holo's own `extra-aarch64/r/rauc/1.14-1` recipe with the version bumped and nothing else
   redesigned — the *only* reason we build it is that 1.14 cannot install a dm-verity bundle on a

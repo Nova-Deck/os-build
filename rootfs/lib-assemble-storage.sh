@@ -224,6 +224,28 @@ for m in "$stage/$payload_dest"/usr/share/vulkan/implicit_layer.d/VkLayer_LSFGVK
     || { echo "ERROR: ${m#"$stage"} lost its manifest-relative library_path between fetch and stage" >&2; exit 1; }
 done
 
+# No two layers may share a name. In a container running native x86 games the host's manifests and
+# these land in one folder, and the Vulkan loader keeps one of several layers with the same name:
+# whichever it read first, even one it then cannot load. Which one that is depends on folder order.
+# Seen on the Pocket ACE 2026-11-24: the x86_64 vram-report-limit layer was dropped for the aarch64
+# one after two unrelated manifests were added.
+check_layer_names() {  # <implicit_layer.d>...
+  python3 - "$@" <<'PYNAMES'
+import json, pathlib, sys
+seen = {}
+for folder in map(pathlib.Path, sys.argv[1:]):
+    manifests = sorted(folder.glob("*.json"))
+    if not manifests:
+        sys.exit(f"ERROR: {folder}: no layer manifests to check")
+    for path in manifests:
+        name = json.loads(path.read_text())["layer"]["name"]
+        if name in seen:
+            sys.exit(f"ERROR: {path} and {seen[name]} are both named {name}; the Vulkan loader keeps only one")
+        seen[name] = path
+PYNAMES
+}
+check_layer_names "$stage/usr/share/vulkan/implicit_layer.d" "$stage/$payload_dest/usr/share/vulkan/implicit_layer.d"
+
 # NEEDED-closure gate: every DT_NEEDED of every payload .so must resolve inside the merged guest
 # (the guest's own libdir, or the payload itself, which overlays it). An ICD with an unresolvable
 # dep is dropped SILENTLY by pressure-vessel's dlopen inspection and dies quietly under system

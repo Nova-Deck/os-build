@@ -120,7 +120,8 @@ done
 # like the lsfg-vk payload layer: both .so files in usr/lib under distinct names, one manifest
 # each, library_path relative to the manifest -- an absolute path resolves against the container's
 # /usr under the compat tool's /run/gfx republish and the loader drops the layer silently. Each
-# arch's loader reads both manifests and skips the one whose ELF class does not match.
+# arch gets its own layer name: the host's manifest lands in the same folder, and the loader keeps
+# one of several layers with the same name -- whichever it read first, even one it cannot load.
 vram=src/vulkan/vram-report-limit-layer
 install -Dm0644 "build-x86_64/$vram/libVkLayer_MESA_vram_report_limit.so" \
   "$OUT/usr/lib/libVkLayer_MESA_vram_report_limit.so"
@@ -135,8 +136,11 @@ with open(src) as f:
 m["layer"]["enable_environment"] = {"ENABLE_MESA_VRAM_REPORT_LIMIT": "1"}
 m["layer"]["disable_environment"] = {"DISABLE_MESA_VRAM_REPORT_LIMIT": "1"}
 os.makedirs(dst, exist_ok=True)
-for name, lib in (("VkLayer_MESA_vram_report_limit.json", "libVkLayer_MESA_vram_report_limit.so"),
-                  ("VkLayer_MESA_vram_report_limit.i686.json", "libVkLayer_MESA_vram_report_limit.i686.so")):
+base = m["layer"]["name"]
+for name, lib, arch in (
+        ("VkLayer_MESA_vram_report_limit.json", "libVkLayer_MESA_vram_report_limit.so", "x86_64"),
+        ("VkLayer_MESA_vram_report_limit.i686.json", "libVkLayer_MESA_vram_report_limit.i686.so", "i686")):
+    m["layer"]["name"] = f"{base}_{arch}"
     m["layer"]["library_path"] = "../../../lib/" + lib
     with open(os.path.join(dst, name), "w") as f:
         json.dump(m, f, indent=3)

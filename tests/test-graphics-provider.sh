@@ -159,6 +159,33 @@ else
     bad "mesa-x86 snapshot '$snap' does not match fex-rootfs version '$ver' -- bump the pins together"
 fi
 
+# 10a2. No two layers the guest container sees may share a name. Runs the assembler's own function.
+fn=$(sed -n '/^check_layer_names()/,/^}/p' "$ASSEMBLE")
+LT=$(mktemp -d)
+mklayer() { mkdir -p "${1%/*}"; printf '{"file_format_version": "1.1.0", "layer": {"name": "%s"}}\n' "$2" >"$1"; }
+if [[ -z $fn ]]; then
+    bad "the assembler has no check_layer_names()"
+else
+    eval "$fn"
+    mklayer "$LT/host/vram.json" VK_LAYER_vram; mklayer "$LT/guest/vram.json" VK_LAYER_vram_x86_64
+    mklayer "$LT/guest/vram.i686.json" VK_LAYER_vram_i686
+    ( check_layer_names "$LT/host" "$LT/guest" ) >/dev/null 2>&1 \
+        && ok "distinct layer names are accepted" || bad "distinct layer names were refused"
+    mklayer "$LT/guest/vram.json" VK_LAYER_vram
+    ( check_layer_names "$LT/host" "$LT/guest" ) >/dev/null 2>&1 \
+        && bad "a guest layer named like the host's was accepted -- the loader keeps one of them" \
+        || ok "a guest layer named like the host's is refused"
+    mklayer "$LT/guest/vram.json" VK_LAYER_vram_i686
+    ( check_layer_names "$LT/host" "$LT/guest" ) >/dev/null 2>&1 \
+        && bad "two guest layers sharing a name were accepted" || ok "two guest layers sharing a name are refused"
+    ( check_layer_names "$LT/host" "$LT/gone" ) >/dev/null 2>&1 \
+        && bad "a missing folder was accepted -- the check would compare nothing" || ok "a missing folder is refused"
+fi
+rm -rf "$LT"
+grep -q '^check_layer_names "\$stage/usr/share/vulkan/implicit_layer.d" "\$stage/\$payload_dest/usr/share/vulkan/implicit_layer.d"' "$ASSEMBLE" \
+    && ok "the assembler checks the host's and the payload's layer names together" \
+    || bad "the assembler never compares the layer names"
+
 # 10b. Only our drivers are visible in the guest's driver folders. Runs the assembler's own function
 #      on a fabricated payload, so this checks what it does, not what it says.
 fn=$(sed -n '/^hide_guest_drivers()/,/^}/p' "$ASSEMBLE")

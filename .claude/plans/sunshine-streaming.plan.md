@@ -492,7 +492,7 @@ not a section of an existing panel. Two halves:
       streams; Cancel keeps the stream going; confirming ends it (Moonlight: `terminated: 0`), and the service, ports,
       input devices and `/run` files are gone. The FIT left the Max's list, the tile stayed.
     - Remove and Forget ask first. A removed guest's tile is refused (Moonlight: "has not been paired. Please open
-      Moonlight to pair", which should name the plugin instead; open). Wrong PIN and Dismiss leave nothing behind, and
+      Moonlight to pair"; 8114558 names the plugin instead, below). Wrong PIN and Dismiss leave nothing behind, and
       a join right after a Dismiss is not blocked. Dismiss reads "The host did not go through with the pairing".
       Joining again after a Forget needs no PIN: neither side unpaired.
     - Forgotten host stayed listed until the panel was reopened (the list went to the panel the dialog had replaced):
@@ -506,12 +506,26 @@ not a section of an existing panel. Two halves:
       Max's stream alone. **Quit from the PC ends the Max's stream (HW), so the tile never sends one.** Any guest's
       Moonlight can, from its app list: a host cannot stop it short of removing that guest.
     - PGRC holds 60 fps on the FIT while it streams to the Max (user); no figure without hosting to compare.
-  - **Next card: 8114558, built and its image checked 2026-11-23, NOT flashed.** It has the plugin fixes above, Sunshine
-    0004 (7a83934: one guest's Quit ends that guest's stream only, user's yes) and Moonlight 0001 (8114558: a refused
-    tile says "Please join it in NovaDeck Streaming first."). Devices run 4a91e8c with the plugin hot-patched.
-    Test: Quit from the PC with the Max streaming (the Max carries on); Quit by the only guest, then rejoin; Quit from
-    the PC's app list while only the Max streams; the refused tile's message.
-    - Owed: the setpriv prefix, tabs of both stores and Sunshine side by side, a rejoin order with two pads, fps with
+  - **Card 8114558, flashed on both and HW-passed 2026-11-24** (FIT host, Max + PC guests). It has the plugin fixes
+    above, Sunshine 0004 (7a83934: one guest's Quit ends that guest's stream only, user's yes) and Moonlight 0001
+    (8114558: a refused tile says "Please join it in NovaDeck Streaming first."). Sunshine: one PID, 0 restarts throughout.
+    - Quit from the PC while the Max streams, twice: the Max carries on. Sunshine logs no Quit; what shows it is the PC's
+      input devices, which stay at the close and go 6 s and 35 s later (the second after an
+      asked-for 30 s wait before the Quit). The Max's inputs stayed.
+    - Quit by the only guest, then rejoin: no PIN, for both. That Quit closed Sunshine's app (`Executing [Desktop]` again
+      on rejoin) and unplugged the pad of the Max, which had stepped away: known limit, back on rejoin.
+    - Remove on the FIT with both streaming: the Max's stream and pad go, the PC's stream stays. The tile then shows the
+      message (user); pairing again gives the Max a new id on the host and keeps its one tile, same appid.
+    - Not covered: the PC had no pad, so a Quit that unplugs a *pad* while another guest streams.
+    - **SM8250 host, same card (Max hosting, FIT + PC guests), HW-passed 2026-11-24.** Service as `deck`, 0 restarts, the
+      capability in `drm_worker` alone, two HEVC encodes; sound captured from the speaker, `sink-sunshine-*` suspended.
+      User: picture upright and whole (0002 from a card), sound on all three, the FIT's pad in a game, Disconnect over a
+      game, rejoin without a PIN. Disconnect ended the FIT's stream (Moonlight: `terminated: -1`), the PC's stayed.
+      The FIT's 2 min 42 s, two clients for the last 2 min: 60.01 fps in, 59.99 rendered, 0.00% lost on the network, 0.03% to
+      jitter, host 6.0 ms average (19.5 max), network 5 ms, decode 0.44 ms. No game was identified in that figure.
+    - Considered and withdrawn (user, 2026-11-24): no tab and no tile per host, everything in the plugin. A stream not
+      started by Steam has no gamescope focus or Steam Input (expected, not tried). The tiles and the tab stay.
+    - Owed: that pad, the setpriv prefix, tabs of both stores and Sunshine side by side, a rejoin order with two pads, fps with
       and without hosting in a game that does not hold 60, 0004's two-guest limit (same-instant connections).
 
 - **Duplicate tiles on the user's other devices (user, 2026-11-23; low priority, decide with this step).** Both test

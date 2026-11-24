@@ -281,6 +281,10 @@ export function Games({ config, setConfig }: { config: Config; setConfig: Dispat
             are known to crash native x86-64 Linux games. Forcing one is an experiment, not a fix.
             Takes effect on next launch.
           </div>
+          <div className="novadeck-field-note">
+            No effect on games running on an arm64 Proton: their graphics calls already go to the
+            host driver.
+          </div>
           {config.fexThunks.map((name) => (
             <SelectEdit key={name} label={name} value={thunkValue(name)} options={THUNK_OPTIONS}
               disabled={!gameEnabled} onChange={(v) => setThunk(name, v)} />

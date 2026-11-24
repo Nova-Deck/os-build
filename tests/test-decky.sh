@@ -459,6 +459,9 @@ fi
 grep -q '"fexThunks"' "$PLUGIN/main.py" \
   && ok "_build_config serves the thunk namespace alongside fexProfiles" \
   || bad "main.py does not expose fexThunks — the tab has nothing to enumerate"
+grep -q 'No effect on games running on an arm64 Proton' "$PLUGIN/src/tabs/Games.tsx" \
+  && ok "the thunk section says it does nothing under an arm64 Proton" \
+  || bad "the thunk section no longer says it has no effect under an arm64 Proton"
 grep -q 'fexThunks' "$PLUGIN/src/tabs/Games.tsx" \
   && ok "Games tab enumerates thunks from the backend-served base list" \
   || bad "Games tab has no thunk controls — the override is hand-edit-only again (issue #47)"

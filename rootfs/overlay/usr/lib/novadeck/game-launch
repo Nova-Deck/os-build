@@ -278,34 +278,33 @@ def reap_stale(directory):
 
 def write_config(settings, game_id, profiles):
     with BASE_CONFIG.open(encoding="utf-8") as f:
-        config = json.load(f)
-
-    # PATH BINDINGS BELONG TO THE FEX THAT SHIPPED THEM, never to us. The base config is the
-    # SYSTEM FEX's, so it names the system rootfs and the system thunk directories; handing those
-    # to a different FEX — Proton's bundled WoW64 build, or Steam's own FEX compat tool — points it
-    # at a tree that is not its own and empties the rootfs it was going to use. Each FEX resolves
-    # these from its own global or template config, so drop them and pass tuning only.
-    for key in ("RootFS", "ThunkGuestLibs", "ThunkHostLibs"):
-        config.get("Config", {}).pop(key, None)
+        base = json.load(f)
 
     resolved = resolve_config(settings, profiles)
-    thunk_overrides = resolve_thunks(settings, config.get("ThunksDB", {}))
+    thunk_overrides = resolve_thunks(settings, base.get("ThunksDB", {}))
     if resolved is None and not thunk_overrides:
         # Nothing explicit — don't claim the slot at all (issue #50). FEX_APP_CONFIG is one
         # slot: Valve's compat tool and Proton generate Steam's curated per-title config only
         # when it is unset, so a config written here "for completeness" erases that curation.
         return None
 
-    # Seed with Steam's curation FIRST, so our explicit choices override it rather than erase it:
-    # base config -> Steam's per-title curation -> the user's explicit profile/thunks.
-    curated_config, curated_thunks = steam_curated()
-    config.setdefault("Config", {}).update(curated_config)
-
+    # ONLY WHAT WAS CHOSEN, never a copy of the base. FEX_APP_CONFIG is a layer over the running
+    # FEX's own config, and that FEX is usually not the system one: Proton ships its own Config.json
+    # (MaxInst 500, against our 5000) and Valve's tool generates one. Restating our settings there
+    # overrides theirs at top priority, for a user who only picked a profile or a thunk; and on the
+    # system FEX the base is the global layer already, so copying it adds nothing. It also keeps our
+    # path bindings (RootFS, Thunk*Libs) out of a FEX that has its own trees. The base file is read
+    # only for the thunk names it declares.
+    #
+    # Steam's curation goes in FIRST, so our explicit choices override it rather than erase it:
+    # Steam's per-title curation -> the user's explicit profile/thunks.
+    tuning, curated_thunks = steam_curated()
     if resolved is not None:
         # Only keys some profile actually declares may be overridden — a typo in game-tweaks.json
         # must not inject arbitrary keys into FEX's config.
         allowed = set().union(*(profile["config"].keys() for profile in profiles.values()))
-        config["Config"].update({k: v for k, v in resolved.items() if k in allowed})
+        tuning.update({k: v for k, v in resolved.items() if k in allowed})
+    config = {"Config": tuning}
 
     # No override means no ThunksDB key at all -- see resolve_thunks. An empty object would be
     # equivalent to FEX (it iterates the members and there are none), so this is for the reader:
@@ -313,8 +312,6 @@ def write_config(settings, game_id, profiles):
     thunks = {**curated_thunks, **thunk_overrides}
     if thunks:
         config["ThunksDB"] = thunks
-    else:
-        config.pop("ThunksDB", None)
 
     directory = config_dir()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)

@@ -116,9 +116,11 @@ path before launching the client.
 
 **How per-game tuning reaches Proton's internal FEX.** Proton generates its own FEX config only if
 `FEX_APP_CONFIG` is unset, and honours a pre-set value otherwise. `game-launch` resolves the
-profile for the running appid, writes a merged config under `$XDG_CACHE_HOME` (`/usr` is
-read-only), exports `FEX_APP_CONFIG`, and execs the real `proton`. A failure to write that config
-is never fatal — the wrapper logs and execs Proton anyway.
+profile for the running appid, writes the chosen keys (and Steam's per-title curation) under
+`$XDG_CACHE_HOME` (`/usr` is read-only), exports `FEX_APP_CONFIG`, and execs the real `proton`. A failure to write that config
+is never fatal — the wrapper logs and execs Proton anyway. It is a layer over Proton's own
+`Config.json`, so nothing else of the system FEX's config goes in: copying it would replace
+Proton's `MaxInst` 500 with our 5000.
 
 The cache dir rather than `$XDG_RUNTIME_DIR` because pressure-vessel shares the cache path into
 the container and does not share the runtime dir, and FEX skips an unreadable `FEX_APP_CONFIG`

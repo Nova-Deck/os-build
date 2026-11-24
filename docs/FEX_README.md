@@ -62,7 +62,7 @@ always run the full thunk set.
 
 ## `usr/lib/novadeck/game-launch`
 
-Resolves the effective profile for the running appid, writes a merged FEX config under
+Resolves the effective profile for the running appid, writes the keys it sets under
 `$XDG_CACHE_HOME`, exports `FEX_APP_CONFIG`, and execs the command it was given.
 
 **One entry point, for every compat tool.** `novadeck-control` writes a game's Steam launch options
@@ -88,9 +88,10 @@ the wrapper exists for named presets and per-game overrides.
 The generated config cannot live beside the base one because `/usr` is read-only. It lands under
 `$XDG_CACHE_HOME` (falling back to `~/.cache`) rather than `$XDG_RUNTIME_DIR`: pressure-vessel
 shares the cache path into a container and not the runtime dir, and an unreadable `FEX_APP_CONFIG`
-is skipped **silently**, so the failure would read as "the profile did nothing". It also strips
-`RootFS`/`ThunkGuestLibs`/`ThunkHostLibs` from the copy — those belong to the system FEX, and the
-FEX reading this file is Proton's own.
+is skipped **silently**, so the failure would read as "the profile did nothing". It holds only what
+was chosen (the profile's keys, Steam's curation, explicit thunks), never a copy of the base config:
+`FEX_APP_CONFIG` is a layer over the running FEX's own config, and that FEX is usually Proton's or
+Valve's, with its own settings and its own `RootFS`/`ThunkGuestLibs`/`ThunkHostLibs`.
 
 ## Native x86 Linux games run on Xwayland, not native Wayland
 

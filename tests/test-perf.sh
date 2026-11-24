@@ -500,8 +500,10 @@ fex_home = tmp / "fexhome"
 fex_home.mkdir(exist_ok=True)
 base_fex = tmp / "base-fex.json"
 base_fex.write_text(_json.dumps(
-    {"Config": {"RootFS": "ArchLinux.ero", "ThunkHostLibs": "/usr/lib/fex-emu/HostThunks",
-                "ThunkGuestLibs": "/usr/share/fex-emu/GuestThunks", "TSOEnabled": "1"},
+    {"Comment": "the system FEX's own",
+     "Config": {"RootFS": "ArchLinux.ero", "ThunkHostLibs": "/usr/lib/fex-emu/HostThunks",
+                "ThunkGuestLibs": "/usr/share/fex-emu/GuestThunks", "TSOEnabled": "1",
+                "MaxInst": "5000", "ProfileStats": "0", "SilentLog": "1"},
      "ThunksDB": {"Vulkan": 0, "GL": 0}}))
 pw.BASE_CONFIG = base_fex
 fake_profiles = {"default": {"config": {"TSOEnabled": "1"}}, "fast": {"config": {"TSOEnabled": "0"}}}
@@ -515,6 +517,10 @@ generated = _json.loads(written.read_text())
 for key in ("RootFS", "ThunkHostLibs", "ThunkGuestLibs"):
     check(f"{key} is not handed to another FEX", key in generated["Config"], False)
 check("tuning still applied", generated["Config"]["TSOEnabled"], "0")
+# The system FEX's OTHER settings stay out as well. FEX_APP_CONFIG is the top layer, so a key copied
+# from our base overrides the running FEX's own: Proton's MaxInst 500 became our 5000, for a user who
+# only picked a profile or a thunk. What is written is exactly what was chosen.
+check("a profile writes the profile's keys and nothing else", generated, {"Config": {"TSOEnabled": "0"}})
 # REGRESSION GUARD, and the reason it is an ABSENCE rather than a value. FEX applies ThunksDB per
 # library name across every config layer, FEX_APP_CONFIG last and therefore winning, and skips a
 # layer that has no ThunksDB property at all (FileManagement.cpp). So writing the key here SEIZES
@@ -565,6 +571,12 @@ written = pw.write_config({"thunks": {"GL": True}}, "620", fake_profiles)
 generated = _json.loads(written.read_text())
 check("appinfo curation survives a thunks-only override", generated["Config"]["TSOEnabled"], "0")
 check("the explicit thunk override is carried", generated["ThunksDB"], {"GL": 1})
+check("a thunks-only override carries curation and the thunk, no base key",
+      generated, {"Config": {"TSOEnabled": "0"}, "ThunksDB": {"GL": 1}})
+os.environ.pop("STEAM_FEX_TSOENABLED")
+generated = _json.loads(pw.write_config({"thunks": {"GL": True}}, "620", fake_profiles).read_text())
+check("with no curation either, only the thunk is written", generated, {"Config": {}, "ThunksDB": {"GL": 1}})
+os.environ["STEAM_FEX_TSOENABLED"] = "0"
 
 # An explicit profile is the user's deliberate choice and beats the curated value.
 written = pw.write_config({"fexProfile": "default"}, "620", fake_profiles)

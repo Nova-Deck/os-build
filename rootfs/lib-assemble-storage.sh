@@ -177,6 +177,9 @@ for f in usr/lib/libvulkan_freedreno.so usr/lib32/libvulkan_freedreno.so \
          usr/lib/libVkLayer_MESA_vram_report_limit.so usr/lib/libVkLayer_MESA_vram_report_limit.i686.so \
          usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit.json \
          usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit.i686.json \
+         usr/lib/libVkLayer_novadeck_game_priority.so usr/lib/libVkLayer_novadeck_game_priority.i686.so \
+         usr/share/vulkan/implicit_layer.d/VkLayer_novadeck_game_priority.x86_64.json \
+         usr/share/vulkan/implicit_layer.d/VkLayer_novadeck_game_priority.i686.json \
          usr/lib/libGLX_mesa.so.0 usr/lib/libEGL_mesa.so.0 usr/lib/libgbm.so.1 \
          usr/lib/dri/msm_dri.so usr/lib/gbm/dri_gbm.so \
          usr/lib32/libGLX_mesa.so.0 usr/lib32/libEGL_mesa.so.0 usr/lib32/libgbm.so.1 \
@@ -186,9 +189,10 @@ for f in usr/lib/libvulkan_freedreno.so usr/lib32/libvulkan_freedreno.so \
 done
 mkdir -p "$stage/$payload_dest"
 cp -a "$payload/usr" "$stage/$payload_dest/"
-# The vram-report-limit manifests must keep a manifest-relative library_path, for the same
+# The payload's own layer manifests must keep a manifest-relative library_path, for the same
 # silent-drop reason as the lsfg-vk manifests below.
-for m in "$stage/$payload_dest"/usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit*.json; do
+for m in "$stage/$payload_dest"/usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit*.json \
+         "$stage/$payload_dest"/usr/share/vulkan/implicit_layer.d/VkLayer_novadeck_game_priority*.json; do
   grep -q '"library_path": "\.\./\.\./\.\./lib/' "$m" \
     || { echo "ERROR: ${m#"$stage"} lost its manifest-relative library_path" >&2; exit 1; }
 done

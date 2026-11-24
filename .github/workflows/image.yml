@@ -128,7 +128,7 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: work/mesa-x86
-          key: mesa-x86-${{ hashFiles('packages/mesa-x86/**', 'packages/mesa/PKGBUILD', 'packages/mesa/source.pin', 'packages/mesa/patches/*.patch', 'packages/fex-rootfs/prebuilt.pin') }}
+          key: mesa-x86-${{ hashFiles('packages/mesa-x86/**', 'packages/mesa/PKGBUILD', 'packages/mesa/source.pin', 'packages/mesa/patches/*.patch', 'packages/novadeck-gpu-priority/**', 'packages/fex-rootfs/prebuilt.pin') }}
       - name: build the FEX-guest Turnip payload
         run: make mesa-x86
       - name: upload the payload

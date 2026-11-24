@@ -159,6 +159,58 @@ else
     bad "mesa-x86 snapshot '$snap' does not match fex-rootfs version '$ver' -- bump the pins together"
 fi
 
+# 10a. The game-priority layer, for native x86 games. Promised, required and built for both arches.
+GP="$ROOT/packages/novadeck-gpu-priority"
+X86_SH="$ROOT/packages/mesa-x86/container-build.sh"
+for f in usr/lib/libVkLayer_novadeck_game_priority.so usr/lib/libVkLayer_novadeck_game_priority.i686.so \
+         usr/share/vulkan/implicit_layer.d/VkLayer_novadeck_game_priority.x86_64.json \
+         usr/share/vulkan/implicit_layer.d/VkLayer_novadeck_game_priority.i686.json; do
+    if grep -q "$f" "$BUILD_SH" && grep -q "$f" "$ASSEMBLE"; then
+        ok "$f is promised by build.sh and required by the assembler"
+    else
+        bad "$f is missing from build.sh or the assembler"
+    fi
+done
+# Same source as the host layer, or the two arches drift: the patches come from its source.pin, and a
+# change to it must rebuild the payload locally (digest, make) and in CI (cache keys, change filter).
+grep -q 'GPU_PRIORITY_PATCHES' "$BUILD_SH" && grep -q 'packages/novadeck-gpu-priority/patches/' "$X86_SH" \
+    && ok "the x86 layer builds from the host layer's own patches" \
+    || bad "the x86 layer does not build from packages/novadeck-gpu-priority"
+grep -q '"\$GPDIR/source.pin"' "$BUILD_SH" && grep -q 'inputs+=("\$GPDIR/patches/' "$BUILD_SH" \
+    && grep -A5 '^MESA_X86_SRC' "$MAKEFILE" | grep -q 'novadeck-gpu-priority' \
+    && ok "a layer change rebuilds the payload" \
+    || bad "a layer change would leave a stale x86 payload"
+for wf in image overlay; do
+    grep 'key: mesa-x86-' "$ROOT/.github/workflows/$wf.yml" | grep -q 'packages/novadeck-gpu-priority/' \
+        && ok "$wf.yml keys the payload cache on the layer" \
+        || bad "$wf.yml would restore a payload built from an older layer"
+done
+grep 'mx=true$' "$ROOT/.github/workflows/overlay.yml" | grep -q 'packages/novadeck-gpu-priority/' \
+    && ok "overlay.yml proof-builds the payload on a layer change" \
+    || bad "overlay.yml does not proof-build the payload on a layer change"
+# Run the manifest generator on the real manifest: in a pressure-vessel container these land beside
+# the host's manifest, and the loader dedupes by NAME whatever the arch.
+GT=$(mktemp -d)
+mkdir -p "$GT/src"
+( cd "$GT/src" && for p in $(pin_field "$GP/source.pin" patches); do patch -s -p1 <"$GP/patches/$p"; done )
+if python3 "$ROOT/packages/mesa-x86/game-priority-manifests.py" "$GT/src/VkLayer_novadeck_game_priority.json" "$GT/out" 2>"$GT/err" \
+   && python3 - "$GT" 2>>"$GT/err" <<'EOF'
+import json, pathlib, sys
+t = pathlib.Path(sys.argv[1])
+host = json.loads((t / "src/VkLayer_novadeck_game_priority.json").read_text())["layer"]
+made = {p.name: json.loads(p.read_text())["layer"] for p in (t / "out").iterdir()}
+assert sorted(made) == ["VkLayer_novadeck_game_priority.i686.json", "VkLayer_novadeck_game_priority.x86_64.json"]
+assert len({host["name"], *(m["name"] for m in made.values())}) == 3, "layer names collide"
+for name, m in made.items():
+    lib = "../../../lib/libVkLayer_novadeck_game_priority" + (".i686" if "i686" in name else "") + ".so"
+    assert m["library_path"] == lib, m["library_path"]
+    for key in ("functions", "enable_environment", "disable_environment", "type", "api_version"):
+        assert m[key] == host[key], key
+EOF
+then ok "both x86 manifests: own names, manifest-relative paths, the host layer's switches"
+else bad "the x86 game-priority manifests are wrong: $(tail -1 "$GT/err" 2>/dev/null)"; fi
+rm -rf "$GT"
+
 # 10a2. No two layers the guest container sees may share a name. Runs the assembler's own function.
 fn=$(sed -n '/^check_layer_names()/,/^}/p' "$ASSEMBLE")
 LT=$(mktemp -d)

@@ -334,6 +334,8 @@ NODE_IMG := docker.io/library/node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa
 MESA_X86_STAMP := work/.mesa-x86.stamp
 MESA_X86_SRC   := packages/mesa-x86/build.sh packages/mesa-x86/container-build.sh \
                   packages/mesa-x86/builder.pin packages/mesa/PKGBUILD packages/mesa/source.pin \
+                  packages/mesa-x86/game-priority-manifests.py \
+                  packages/novadeck-gpu-priority/source.pin $(wildcard packages/novadeck-gpu-priority/patches/*.patch) \
                   packages/fex-rootfs/prebuilt.pin $(wildcard packages/mesa/patches/*.patch)
 
 # The x86_64 + i686 lsfg-vk layer for the FEX guest (packages/lsfg-vk-x86/), built from source

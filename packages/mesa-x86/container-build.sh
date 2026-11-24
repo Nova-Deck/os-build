@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # mesa-x86 container half — runs INSIDE the pinned x86 Arch image (see build.sh / builder.pin).
 # Expects: SNAPSHOT (Arch Archive date, e.g. 2026/08/11), PATCHES (mesa patch list, may be
-# empty), HOST_UID/HOST_GID (for output ownership), the repo mounted at /repo.
+# empty), GPU_PRIORITY_PATCHES (the game-priority layer's, its whole source), HOST_UID/HOST_GID (for
+# output ownership), the repo mounted at /repo.
 set -euxo pipefail
 
 : "${SNAPSHOT:?}" "${HOST_UID:?}" "${HOST_GID:?}"
@@ -22,7 +23,7 @@ printf '[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >>/etc/pacman.conf
 pacman -Syyuu --noconfirm
 pacman -S --noconfirm --needed \
   meson ninja python-mako python-yaml python-packaging python-ply \
-  bison flex cmake glslang \
+  bison flex cmake glslang vulkan-headers \
   libdrm libxcb libx11 libxshmfence libxrandr xcb-util-keysyms wayland wayland-protocols \
   libglvnd libxext libxfixes libxxf86vm expat zstd zlib \
   lib32-glibc lib32-gcc-libs lib32-libdrm lib32-libxcb lib32-libx11 \
@@ -146,6 +147,34 @@ for name, lib, arch in (
         json.dump(m, f, indent=3)
         f.write("\n")
 EOF
+
+# The game-priority layer, both arches, from the host package's own patches: native x86 games load
+# the guest's x86 Vulkan loader, which cannot use the aarch64 build. Same file layout as the layer
+# above. novadeck-steam enables it for games through gfx.txt.
+gp=/tmp/game-priority
+mkdir -p "$gp"
+for p in ${GPU_PRIORITY_PATCHES:?}; do
+  patch -d "$gp" -p1 <"/repo/packages/novadeck-gpu-priority/patches/$p"
+done
+gplib=libVkLayer_novadeck_game_priority
+gpflags=(-O2 -march=x86-64 -Wall -Werror -shared -fPIC -fvisibility=hidden
+         -Wl,-z,relro,-z,now,-z,defs)
+mkdir -p "$OUT/usr/lib"
+gcc "${gpflags[@]}"      -o "$OUT/usr/lib/$gplib.so"      "$gp/game_priority.c" -lpthread
+gcc -m32 "${gpflags[@]}" -o "$OUT/usr/lib/$gplib.i686.so" "$gp/game_priority.c" -lpthread
+chmod 0644 "$OUT/usr/lib/$gplib.so" "$OUT/usr/lib/$gplib.i686.so"
+python3 /repo/packages/mesa-x86/game-priority-manifests.py \
+  "$gp/VkLayer_novadeck_game_priority.json" "$OUT/usr/share/vulkan/implicit_layer.d"
+# Only the two entry points the manifest names may be exported. An exported vk* name is preemptible,
+# and a native game that links libvulkan then binds it to the loader's own (packages/novadeck-gpu-
+# priority says how that hangs).
+for so in "$OUT/usr/lib/$gplib.so:64" "$OUT/usr/lib/$gplib.i686.so:32"; do
+  readelf -h "${so%:*}" | grep -q "Class: *ELF${so##*:}\$" \
+    || { echo "ERROR: mesa-x86: ${so%:*} is not ELF${so##*:}" >&2; exit 1; }
+  exports="$(nm -D --defined-only "${so%:*}" | awk '{print $NF}' | sort | xargs)"
+  [ "$exports" = "novadeck_game_priority_GetDeviceProcAddr novadeck_game_priority_GetInstanceProcAddr" ] \
+    || { echo "ERROR: mesa-x86: ${so%:*} exports: $exports" >&2; exit 1; }
+done
 
 # The GL runtime, both arches, taken whole from `meson install` so symlink chains and the dri/
 # hardlinks to libdril_dri.so survive (cp -a keeps both). The overlay lays these over the guest's

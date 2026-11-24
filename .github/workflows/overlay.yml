@@ -199,9 +199,9 @@ jobs:
               done
               why="changed since origin/$BASE_REF"
             fi
-            # mesa-x86's inputs: its own dir, the host mesa sources it mirrors, and the fex-rootfs
-            # pin its snapshot is asserted against (packages/mesa-x86/build.sh).
-            printf '%s\n' "$changed" | grep -qE '^(packages/mesa-x86/|packages/mesa/|packages/fex-rootfs/prebuilt\.pin$)' && mx=true
+            # mesa-x86's inputs: its own dir, the host mesa and game-priority sources it mirrors, and the
+            # fex-rootfs pin its snapshot is asserted against (packages/mesa-x86/build.sh).
+            printf '%s\n' "$changed" | grep -qE '^(packages/mesa-x86/|packages/mesa/|packages/novadeck-gpu-priority/|packages/fex-rootfs/prebuilt\.pin$)' && mx=true
             # lsfg-vk-x86's inputs: its own dir, the HOST PKGBUILD it reads the upstream tag from
             # (so the two arches cannot drift), and the fex-rootfs pin its snapshot is asserted
             # against (packages/lsfg-vk-x86/build.sh).
@@ -310,7 +310,7 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: work/mesa-x86
-          key: mesa-x86-${{ hashFiles('packages/mesa-x86/**', 'packages/mesa/PKGBUILD', 'packages/mesa/source.pin', 'packages/mesa/patches/*.patch', 'packages/fex-rootfs/prebuilt.pin') }}
+          key: mesa-x86-${{ hashFiles('packages/mesa-x86/**', 'packages/mesa/PKGBUILD', 'packages/mesa/source.pin', 'packages/mesa/patches/*.patch', 'packages/novadeck-gpu-priority/**', 'packages/fex-rootfs/prebuilt.pin') }}
       - name: build
         run: make mesa-x86
 

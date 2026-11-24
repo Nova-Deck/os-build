@@ -12,6 +12,7 @@
 #   work/mesa-x86/out/usr/share/vulkan/icd.d/freedreno_icd.{x86_64,i686}.json
 #   work/mesa-x86/out/usr/lib{,32}/libxcb-keysyms.so.1          see container-build.sh
 #   work/mesa-x86/out/usr/lib/libVkLayer_MESA_vram_report_limit{,.i686}.so  + their implicit manifests
+#   work/mesa-x86/out/usr/lib/libVkLayer_novadeck_game_priority{,.i686}.so  + their implicit manifests
 #   work/mesa-x86/out/usr/lib{,32}/{libGLX_mesa,libEGL_mesa,libgbm,libgallium-*}.so*, dri/, gbm/
 #                                                               freedreno (+zink) GL, both arches
 #   work/mesa-x86/out/usr/share/{glvnd/egl_vendor.d/50_mesa.json,drirc.d/00-mesa-defaults.conf}
@@ -25,6 +26,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PKGDIR="$ROOT/packages/mesa-x86"
 MESADIR="$ROOT/packages/mesa"
+GPDIR="$ROOT/packages/novadeck-gpu-priority"
 FEXPIN="$ROOT/packages/fex-rootfs/prebuilt.pin"
 WORKDIR="$ROOT/work/mesa-x86"
 MARKER="$WORKDIR/.inputs.sha256"
@@ -53,12 +55,22 @@ for p in $PATCHES; do
   [ -f "$MESADIR/patches/$p" ] || { echo "ERROR: mesa-x86: missing patch $MESADIR/patches/$p (declared in packages/mesa/source.pin)" >&2; exit 1; }
 done
 
+# The game-priority layer's whole source is its patches (see its source.pin), so the x86 build and the
+# host package cannot drift.
+GPU_PRIORITY_PATCHES="$(pin_field "$GPDIR/source.pin" patches)"
+: "${GPU_PRIORITY_PATCHES:?packages/novadeck-gpu-priority/source.pin: missing patches}"
+for p in $GPU_PRIORITY_PATCHES; do
+  [ -f "$GPDIR/patches/$p" ] || { echo "ERROR: mesa-x86: missing patch $GPDIR/patches/$p (declared in packages/novadeck-gpu-priority/source.pin)" >&2; exit 1; }
+done
+
 # Input digest, inputhash.sh-style: committed inputs only, patches in declared order. The mesa
 # PKGBUILD is in the list because it names the source tarball + sha; the fex-rootfs pin because
 # the snapshot assertion above couples us to it.
 inputs=("$PKGDIR/build.sh" "$PKGDIR/container-build.sh" "$PKGDIR/builder.pin"
-        "$MESADIR/PKGBUILD" "$MESADIR/source.pin" "$FEXPIN")
+        "$PKGDIR/game-priority-manifests.py"
+        "$MESADIR/PKGBUILD" "$MESADIR/source.pin" "$GPDIR/source.pin" "$FEXPIN")
 for p in $PATCHES; do inputs+=("$MESADIR/patches/$p"); done
+for p in $GPU_PRIORITY_PATCHES; do inputs+=("$GPDIR/patches/$p"); done
 HASH="$(cat "${inputs[@]}" | sha256sum | cut -d' ' -f1)"
 
 ARTIFACTS=(
@@ -72,6 +84,10 @@ ARTIFACTS=(
   usr/lib/libVkLayer_MESA_vram_report_limit.i686.so
   usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit.json
   usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit.i686.json
+  usr/lib/libVkLayer_novadeck_game_priority.so
+  usr/lib/libVkLayer_novadeck_game_priority.i686.so
+  usr/share/vulkan/implicit_layer.d/VkLayer_novadeck_game_priority.x86_64.json
+  usr/share/vulkan/implicit_layer.d/VkLayer_novadeck_game_priority.i686.json
   usr/lib/libGLX_mesa.so.0 usr/lib/libEGL_mesa.so.0 usr/lib/libgbm.so.1
   usr/lib/dri/msm_dri.so usr/lib/dri/zink_dri.so usr/lib/gbm/dri_gbm.so
   usr/lib32/libGLX_mesa.so.0 usr/lib32/libEGL_mesa.so.0 usr/lib32/libgbm.so.1
@@ -96,6 +112,7 @@ docker run --rm --platform linux/amd64 \
   -v "$ROOT":/repo \
   -e SNAPSHOT="$SNAPSHOT" \
   -e PATCHES="$PATCHES" \
+  -e GPU_PRIORITY_PATCHES="$GPU_PRIORITY_PATCHES" \
   -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
   "$IMAGE" bash /repo/packages/mesa-x86/container-build.sh
 

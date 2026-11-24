@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Mon, 7 Sep 2026 12:30:00 +0200
+Subject: [PATCH] clk: qcom: dispcc-sm8550 mdp RCG ops
+
+dispcc-sm8550.c -- "Fix disp_cc_mdss_mdp_clk_src ops", retargeted from
+dispcc-sm8450 (same node, same shape), from "SM8450 QoL changes (dispcc)"
+(lore.kernel.org, Esteban Urrutia, Reviewed-by Konrad Dybcio).
+clk_rcg2_shared_no_init_park_ops leaves the frequency alone at registration
+instead of parking the RCG, which upstream wants because the park shows as a
+flicker on a bootloader-lit panel -- ours.
+
+This patch used to carry the Lucid Ole PLL guard too. 7.3.6 has that guard as
+ff94db2cd6c9 ("clk: qcom: alpha-pll: Check Lucid Ole PLL status before
+configuring"), and the pinned tree must keep it: without it this hunk is FATAL,
+in a way nothing reports. Measured on an AYANEO Pocket ACE, before the guard:
+
+  this hunk alone, no flag   -> BLACK PANEL   (build 20260907T094603Z)
+  this hunk alone, with flag -> BLACK PANEL   (build 20260907T100424Z)
+  guard alone                -> works, warning 0 (build 20260907T120035Z)
+  both                       -> works, warning 0 (build 20260907T122602Z)
+
+Without the .init park the RCG stays sourced from whatever the bootloader left
+running, and without the guard probe then reprograms exactly that PLL underneath
+it. The black builds reported no warning, no underrun, no vblank timeout,
+backlight on, connector connected, gamescope presenting and flips completing.
+Only a human looking at the panel could tell them from a good build.
+
+This also drops a LOCAL GUESS that lived here: CLK_OPS_PARENT_ENABLE, whose
+commit message claimed it fixed the "rcg didn't update its configuration"
+warning. It never did -- the flag covers .set_rate and .set_parent while the
+failing update comes from .init. The node is byte-for-byte the upstream shape,
+matching dispcc-x1e80100.
+
+COVERS BOTH SHIPPING SoCs: dispcc-sm8550.c serves SM8650 too, via
+`{ .compatible = "qcom,sm8650-dispcc" }` in its match table.
+
+The sm8450 halves are upstream; this sm8550 retarget is not, and should be sent.
+
+Signed-off-by: Esteban Urrutia <esteuwu@proton.me>
+Signed-off-by: Philippe Simons <simons.philippe@gmail.com>
+---
+ drivers/clk/qcom/dispcc-sm8550.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/clk/qcom/dispcc-sm8550.c b/drivers/clk/qcom/dispcc-sm8550.c
+--- a/drivers/clk/qcom/dispcc-sm8550.c
++++ b/drivers/clk/qcom/dispcc-sm8550.c
+@@ -622,7 +622,7 @@ static struct clk_rcg2 disp_cc_mdss_mdp_clk_src = {
+ 		.parent_data = disp_cc_parent_data_8,
+ 		.num_parents = ARRAY_SIZE(disp_cc_parent_data_8),
+ 		.flags = CLK_SET_RATE_PARENT,
+-		.ops = &clk_rcg2_shared_ops,
++		.ops = &clk_rcg2_shared_no_init_park_ops,
+ 	},
+ };

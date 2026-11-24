@@ -27,11 +27,11 @@ change-id: 20261029-drm-msm-gmem-base-fix-e1b20418ae68
 Best regards,
 
 diff --git a/drivers/gpu/drm/msm/adreno/adreno_gpu.c b/drivers/gpu/drm/msm/adreno/adreno_gpu.c
-index 5832dc25d6bf..5b05386ecffe 100644
+index dadfe4c69..f7882bb80 100644
 --- a/drivers/gpu/drm/msm/adreno/adreno_gpu.c
 +++ b/drivers/gpu/drm/msm/adreno/adreno_gpu.c
 @@ -382,7 +382,9 @@ int adreno_get_param(struct msm_gpu *gpu, struct msm_context *ctx,
- 		*value = adreno_gpu->info->gmem;
+ 		*value = adreno_gpu->gmem;
  		return 0;
  	case MSM_PARAM_GMEM_BASE:
 -		if (adreno_gpu->info->family >= ADRENO_6XX_GEN3)

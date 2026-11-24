@@ -98,18 +98,18 @@ index 27d10eb8a..d9eb2cdbf 100644
  
  #endif
 diff --git a/drivers/media/platform/qcom/iris/iris_instance.h b/drivers/media/platform/qcom/iris/iris_instance.h
-index 9c759abca..9dfbaff36 100644
+index b8bfb79d4..065fca5a4 100644
 --- a/drivers/media/platform/qcom/iris/iris_instance.h
 +++ b/drivers/media/platform/qcom/iris/iris_instance.h
-@@ -6,6 +6,7 @@
- #ifndef __IRIS_INSTANCE_H__
+@@ -7,6 +7,7 @@
  #define __IRIS_INSTANCE_H__
  
+ #include <linux/kref.h>
 +#include <linux/wait.h>
  #include <linux/workqueue.h>
- #include <media/v4l2-ctrls.h>
  
-@@ -68,6 +69,7 @@ enum iris_fmt_type_cap {
+ #include <media/v4l2-ctrls.h>
+@@ -71,6 +72,7 @@ enum iris_fmt_type_cap {
   * @metadata_idx: index for metadata buffer
   * @codec: codec type
   * @last_buffer_dequeued: a flag to indicate that last buffer is sent by driver
@@ -117,7 +117,7 @@ index 9c759abca..9dfbaff36 100644
   * @seq_seen: firmware has reported the sequence since input streaming started
   * @capture_deferred: capture is streaming but not yet set up in firmware
   * @deferred_capture_work: sets up a deferred capture once the sequence is known
-@@ -118,6 +120,7 @@ struct iris_inst {
+@@ -122,6 +124,7 @@ struct iris_inst {
  	u32				metadata_idx;
  	u32				codec;
  	bool				last_buffer_dequeued;

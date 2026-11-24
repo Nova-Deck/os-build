@@ -104,18 +104,18 @@ index f6e9cbf..867e007 100644
  
  			iris_helper_buffers_done(inst, V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
 diff --git a/drivers/media/platform/qcom/iris/iris_instance.h b/drivers/media/platform/qcom/iris/iris_instance.h
-index a770331..9c759ab 100644
+index dde5d0b8a..b8bfb79d4 100644
 --- a/drivers/media/platform/qcom/iris/iris_instance.h
 +++ b/drivers/media/platform/qcom/iris/iris_instance.h
-@@ -6,6 +6,7 @@
- #ifndef __IRIS_INSTANCE_H__
+@@ -7,6 +7,7 @@
  #define __IRIS_INSTANCE_H__
  
+ #include <linux/kref.h>
 +#include <linux/workqueue.h>
+ 
  #include <media/v4l2-ctrls.h>
  
- #include "iris_buffer.h"
-@@ -67,6 +68,9 @@ enum iris_fmt_type_cap {
+@@ -70,6 +71,9 @@ enum iris_fmt_type_cap {
   * @metadata_idx: index for metadata buffer
   * @codec: codec type
   * @last_buffer_dequeued: a flag to indicate that last buffer is sent by driver
@@ -125,7 +125,7 @@ index a770331..9c759ab 100644
   * @last_buf_ns: start time of received input buffer for current one second FPS window
   * @frame_counter: input buffer counter for current one second FPS window
   * @frame_rate: frame rate of current instance
-@@ -114,6 +118,9 @@ struct iris_inst {
+@@ -118,6 +122,9 @@ struct iris_inst {
  	u32				metadata_idx;
  	u32				codec;
  	bool				last_buffer_dequeued;

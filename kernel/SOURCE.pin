@@ -46,11 +46,15 @@
 # q6apm/q6prm guards (1/2) but not its apr.c half (2/2), so 0897 was cut down to apr.c. PCIe
 # outbound DMA bypass on every DWC host is the leg. Read the 7.3.5 section below. HW-PASSED on
 # Pocket FIT (covers S2 + ACE) and Pocket Max the same day.
-version:    7.3.5
-url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.5.tar.xz
-sha256:     8f293f83d54f0b7b9be56863ebc5e4ea79d73e530b4ae55c572be97ef39f0990
-git_tag:    v7.3.5
-git_commit: 988117cc1bb17338c586a4e21ade88b5397eac33
+# RE-PINNED 2026-11-24 (7.3.6, 2659 commits, issue #158). NOT a cheap bump: stable took eight of our
+# patches whole and parts of four more, rebuilt iris's instance lifetime and touched the wcd939x
+# port switches 0857 remaps. 0285 MUST STAY: stable has the commit that needs its clamp. Read the
+# 7.3.6 section below. HW GATE OWED.
+version:    7.3.6
+url:        https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.6.tar.xz
+sha256:     8183d475a76a0faffa92d6cd500af421f589dfd0300a0f1060bb875e11d45723
+git_tag:    v7.3.6
+git_commit: 1a0388846138eda9f6eb4258ff227a223afc2f52
 
 # The sha256 above is the one kernel.org publishes in the SIGNED sha256sums.asc for v7.x, not a
 # hash of whatever the CDN happened to serve — re-checked 2026-11-17. The .asc itself verifies as
@@ -77,6 +81,72 @@ git_commit: 988117cc1bb17338c586a4e21ade88b5397eac33
 # Treat 'in-series point release' as a prediction about EFFORT, never about RISK.
 # Re-run every gate, every time — and note that neither of those two findings came from an
 # offline gate. Both came from hardware.
+#
+# ============ 7.3.6 — PINNED 2026-11-24, HW GATE OWED (issue #158) ============
+#
+# 7.3.5 -> 7.3.6: 2659 commits, 2352 files. Zero dts/dtsi of SM8250/SM8550/SM8650/SM8750 (all the
+# qcom dts volume is other SoCs). sched_ext is most of the kernel/ volume; scx_lavd is a user toggle.
+#
+# LANDED WHOLE, dropped: 0283 (2307764c285c), 0284 (c2cc627a1a56), 0865 (9b65674c8058), 0950
+# (e5f18210c8e8), 1060 (a7fde3572d5f, one warning string differs), 1091 (5bfe967d7cee), 1100
+# (216a6effc9b9 + 46c2a699e74c), 1101 (f01d9fd3baab).
+# LANDED IN PART, cut: 0110 loses the Lucid Ole PLL guard (ff94db2cd6c9) and keeps the dispcc hunk,
+# which is FATAL without that guard. 0285 loses its first two commits (21291ab009bd, b91648f74186).
+# 1032 loses the dropped-reg-event half (4e566abff512; only comments differ). 1150 loses the sm8750
+# binding (52d18aa43c61).
+# 0285 IS LOAD-BEARING NOW: b91648f74186 makes the MX dependency levels real on every GMU GPU, and
+# without 0285's clamp a GPU corner above the top MX corner fails GMU init with -EINVAL. Stable
+# does not have the clamp (86f80884fb7f).
+# REBASED, code unchanged: 0282 and 1088 (context), 1094 and 1102 (iris_instance.h include list).
+# REBASED, code merged: 0857. Stable's b3807acee21d reads the port switches per channel and drops
+# port_enable[]. 0857 remaps HPH_L/R to HIFI_PCM_L/R, so the channel mask has to come from the
+# REMAPPED channel; stable's line verbatim would test HPH_L's mask against the HIFI_PCM port.
+#
+# HOW IT WAS DONE: a scratch repo with 7.3.5 + our 254 patches as commits, rebased onto 7.3.6.
+# range-diff: 237 commits identical, 9 changed, 8 gone. The edited set, applied to a pristine 7.3.6
+# in lexical order at --fuzz=0 (246 patches, zero fuzz, zero rejects), gives a tree byte-identical
+# to the rebase.
+# DROP CHECK: every (patch, file) pair REVERSE-applied to the pristine tree: 493 pairs checked (81
+# created files skipped), nothing reverses. Before the edits the same run flagged exactly the
+# patches above.
+#
+# READ, outside what we carry:
+#   - iris: instances are refcounted (da146dab51d1): every iris_get_instance() now needs an
+#     iris_inst_put(). All four call sites in the patched tree have one; 1103's early returns sit in
+#     the handlers, not between the pair. open() refuses past max_session_count (dbc08cf931f2);
+#     firmware autodetect is reverted (e17e310613cd), so the HFI generation is fixed at probe
+#     and the capability tables are filled once, there. Nothing writes them after probe.
+#   - UFS: POST_CHANGE is notified on a failed gear switch with NULL params (ufs-qcom logs and
+#     returns), auto-hibern8 errors count again, AHIT is under a mutex. 1082 keeps AHIT off.
+#   - wsa883x/wsa884x: the VI-sense port goes from 1 to 2 channels. wsa884x is the speaker amp of the
+#     Pocket ACE, FIT and S2.
+#   - DPU: disable takes the slave interface before the master (12d0650b48ba). Only a bonded panel
+#     has a slave: Pocket S2 and S2K.
+#   - DSC width rounds up (e2007c80ce13). Ours are 1080 wide at 8 bpp, an exact third: no change.
+#   - ath12k: IRQ and NAPI teardown, MSDU ext descriptor DMA fixes. ath11k: IRQ balance across
+#     suspend, init-failure fixes. mac80211: encap-offload key and 4-addr fixes.
+#   - qcom_battmgr: USB_TYPE now reads USB_ADAP_TYPE. Nothing in this repo reads usb_type
+#     (the snapshot packages, UPower among them, were not checked).
+#   - Bluetooth: hci_uart's H4 receive moved to a shared helper (hci_qca uses it).
+#   - a6xx_pm_resume() error paths: the GMU-wrapper path, which none of our GPUs take.
+# CONFIG: all 802 symbols named in the fragments exist. The first container build stopped on
+# CLK_GLYMUR_GCC, which a trimmed fragment asks off: stable moved EVACC's duplicate `default m` to
+# CLK_GLYMUR_GPUCC, which selects it. GPUCC added to trim-qcom-socs.config.
+# BUILD: green in the container, Image (`Linux version 7.3.6`) + 24 dtbs + modules (7.3.6); trims
+# confirmed (42 + 268 + 74). All 798 directives across the four fragments (401 values + 397 `is not
+# set`) asserted against the final .config: zero mismatches. The final .config is IDENTICAL to
+# 7.3.5's apart from the header.
+#
+# WHAT ONLY HARDWARE CAN SETTLE:
+#   - iris on gen1 (SM8250) and gen2: decode with a mid-stream restart, an encode, and opening and
+#     closing sessions repeatedly (Remote Play or Sunshine both do all three).
+#   - Speakers on a wsa884x board (FIT covers ACE and S2), and the 3.5 mm jack on FIT/S2 in HPH PCM
+#     mode, plugged before and after boot: that is 0857's merged path.
+#   - Pocket S2 panel off and on (`gamescopectl drm_sleep_internal_screen`): the slave-first disable.
+#     The FIT does NOT cover this one, its panel is single-interface.
+#   - Wi-Fi association and a transfer each way on WCN7850 and QCA6390, and a Bluetooth pad.
+#   - UFS: a boot from internal storage with nothing in dmesg.
+#   Everything still owed from the 7.3.4, 7.3.3 and 7.3.1 gates below stays owed.
 #
 # ============ 7.3.5 — PINNED 2026-11-17, HW-PASSED FIT + MAX (issue #151) ============
 #

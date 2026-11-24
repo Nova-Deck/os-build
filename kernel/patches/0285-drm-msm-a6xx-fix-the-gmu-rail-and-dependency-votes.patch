@@ -1,39 +1,36 @@
 From: Akhil P Oommen <akhilpo@oss.qualcomm.com>
 Subject: [PATCH] drm/msm/a6xx: fix the GMU rail and dependency votes
 
-Four commits of the Hawi GPU series
+Two commits of the Hawi GPU series
 <20260923-hawi-gpu-v1-*-0c3c79a1a470@oss.qualcomm.com>, in v7.4-rc1, in
 upstream order:
 
- 128a0edde507 drm/msm/a6xx: Fix secondary rail vote in ARC votes
- eab0aff8965e drm/msm/a6xx: Fix RPMH dependency votes
  b5269bf0e1ad drm/msm/a6xx: Factor out RPMh arc-vote helpers
  86f80884fb7f drm/msm/a6xx: Clamp MX dependency vote
 
-The first matches the secondary rail against the selected primary voltage
-rather than the requested level, which could under-vote the dependent rail.
-It reaches every GMU GPU, and votes only go up.
+7.3.6 carries the two before them:
 
-The second resolves the GPU frequencies against the GPU's OPP table. The GMU
-device has no such entries, so every level came back 0 and the dependency
-votes all took the lowest MX corner. Only A8xx sends those votes to the GMU.
+ 128a0edde507 drm/msm/a6xx: Fix secondary rail vote in ARC votes (stable 21291ab009bd)
+ eab0aff8965e drm/msm/a6xx: Fix RPMH dependency votes (stable b91648f74186)
 
-The second does not stand alone: the vote table is built on every GMU GPU,
-and with real levels a GPU corner above the highest MX corner fails GMU init
-with -EINVAL. The last commit clamps to the highest MX corner instead, and the
-third carries the helper it does that in.
+The second does not stand alone. It resolves the GPU frequencies against the
+GPU's OPP table, so every level is now real instead of 0. The vote table is
+built on every GMU GPU, and with real levels a GPU corner above the highest MX corner fails GMU init with
+-EINVAL. The clamp uses the highest MX corner instead, and the first of the two
+carries the helper it does that in. Do not drop this before the clamp is in the
+pinned tree.
 
-020b8eaa1db8 (BX rail support, 5/6 of the series) sits between those two and
-is not taken: it is keyed on a "gbx.lvl" resource for a later platform. The
-clamp is the same one word without it.
+020b8eaa1db8 (BX rail support, 5/6 of the series) sits between the stable pair
+and these and is not taken: it is keyed on a "gbx.lvl" resource for a later
+platform. The clamp is the same one word without it.
 
 Signed-off-by: Akhil P Oommen <akhilpo@oss.qualcomm.com>
 ---
 diff --git a/drivers/gpu/drm/msm/adreno/a6xx_gmu.c b/drivers/gpu/drm/msm/adreno/a6xx_gmu.c
-index b777628e7..a5188cc74 100644
+index 0a8306c77..df2e84336 100644
 --- a/drivers/gpu/drm/msm/adreno/a6xx_gmu.c
 +++ b/drivers/gpu/drm/msm/adreno/a6xx_gmu.c
-@@ -1723,70 +1723,85 @@ static unsigned int a6xx_gmu_get_arc_level(struct device *dev,
+@@ -1727,74 +1727,85 @@ static unsigned int a6xx_gmu_get_arc_level(struct device *dev,
  	return val;
  }
  
@@ -143,6 +140,10 @@ index b777628e7..a5188cc74 100644
  		/*
 -		 * Look for a level in in the secondary list that matches. If
 -		 * nothing fits, use the maximum non zero vote
+-		 *
+-		 * The secondary rail depends on the primary rail, so match it
+-		 * against the quantized primary voltage (which is >= the
+-		 * requested level), not the requested level itself.
 +		 * Look for a matching level in the secondary list; if nothing
 +		 * fits, clamp to the highest available vote. The secondary rail
 +		 * depends on the primary rail, so match it against the selected
@@ -151,7 +152,7 @@ index b777628e7..a5188cc74 100644
  		 */
 -
 -		for (j = 0; j < sec_count; j++) {
--			if (sec[j] >= level) {
+-			if (sec[j] >= pri[pindex]) {
 -				sindex = j;
 -				break;
 -			} else if (sec[j]) {
@@ -163,7 +164,7 @@ index b777628e7..a5188cc74 100644
  
  		/* Construct the vote */
  		votes[i] = ((pri[pindex] & 0xffff) << 16) |
-@@ -1802,16 +1817,9 @@ static int a6xx_gmu_rpmh_dep_votes_init(struct device *dev, u32 *votes,
+@@ -1810,16 +1821,9 @@ static int a6xx_gmu_rpmh_dep_votes_init(struct device *dev, u32 *votes,
  	const u16 *mx;
  	size_t count;
  
@@ -181,12 +182,13 @@ index b777628e7..a5188cc74 100644
  
  	/* Fix the vote for zero frequency */
  	votes[0] = 0xffffffff;
-@@ -1819,26 +1827,10 @@ static int a6xx_gmu_rpmh_dep_votes_init(struct device *dev, u32 *votes,
+@@ -1827,26 +1831,10 @@ static int a6xx_gmu_rpmh_dep_votes_init(struct device *dev, u32 *votes,
  	/* Construct a vote for rest of the corners */
  	for (int i = 1; i < freqs_count; i++) {
  		unsigned int level = a6xx_gmu_get_arc_level(dev, freqs[i]);
 -		u8 j, index = 0;
--
++		int index = a6xx_gmu_rpmh_arc_index(dev, mx, count, level, true);
+ 
 -		/* Get the primary index that matches the arc level */
 -		for (j = 0; j < count; j++) {
 -			if (mx[j] >= level) {
@@ -202,8 +204,7 @@ index b777628e7..a5188cc74 100644
 -			DRM_DEV_ERROR(dev, "Available levels:\n");
 -			for (j = 0; j < count; j++)
 -				DRM_DEV_ERROR(dev, "  %u\n", mx[j]);
-+		int index = a6xx_gmu_rpmh_arc_index(dev, mx, count, level, true);
- 
+-
 -			return -EINVAL;
 -		}
 +		if (index < 0)
@@ -211,20 +212,3 @@ index b777628e7..a5188cc74 100644
  
  		/* Construct the vote */
  		votes[i] = (0x3fff << 14) | (index << 8) | (0xff);
-@@ -1876,13 +1868,13 @@ static int a6xx_gmu_rpmh_votes_init(struct a6xx_gmu *gmu)
- 	ret = a6xx_gmu_rpmh_arc_votes_init(&gpu->pdev->dev, gmu->gx_arc_votes,
- 		gmu->gpu_freqs, gmu->nr_gpu_freqs, "gfx.lvl", sec_id);
- 
-+	ret |= a6xx_gmu_rpmh_dep_votes_init(&gpu->pdev->dev, gmu->dep_arc_votes,
-+		gmu->gpu_freqs, gmu->nr_gpu_freqs);
-+
- 	/* Build the CX votes */
- 	ret |= a6xx_gmu_rpmh_arc_votes_init(gmu->dev, gmu->cx_arc_votes,
- 		gmu->gmu_freqs, gmu->nr_gmu_freqs, "cx.lvl", "mx.lvl");
- 
--	ret |= a6xx_gmu_rpmh_dep_votes_init(gmu->dev, gmu->dep_arc_votes,
--		gmu->gpu_freqs, gmu->nr_gpu_freqs);
--
- 	/* Build the interconnect votes */
- 	if (info->bcms && gmu->nr_gpu_bws > 1)
- 		ret |= a6xx_gmu_rpmh_bw_votes_init(adreno_gpu, info, gmu);

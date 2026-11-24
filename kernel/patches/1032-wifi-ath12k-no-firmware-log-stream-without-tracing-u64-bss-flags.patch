@@ -1,0 +1,54 @@
+From: Aaron N <aaronna@valvesoftware.com>
+Subject: [PATCH] wifi: ath12k: no firmware log stream without tracing, u64
+ BSS flag cache
+
+Two Steam Frame kernel fixes, carried as one:
+
+1. Don't ask the firmware for its log stream unless it can be
+   consumed. ath12k_qmi_wlanfw_wlan_ini_send() always set enable_fwlog,
+   so the firmware sends DIAG events, up to hundreds per second, that
+   ath12k_wmi_diag_event() only hands to a tracepoint. Without
+   CONFIG_ATH12K_TRACING each one is received and dropped.
+   enable_fwlog now follows CONFIG_ATH12K_TRACING.
+2. Keep the cached BSS change mask as u64. mac80211 passes
+   link_info_changed() a u64 mask, and ath12k caches it for links whose
+   vdev does not exist yet, to replay once the vdev is assigned. A u32
+   cache truncated flags above bit 31, such as BSS_CHANGED_TPE.
+
+Squashed from the Steam Frame kernel's sm8650-7.2 branch, bodies
+identical:
+  4ed1ce3fa ath12k: don't send DIAG events if there is no sink
+  a498f595a wifi: ath12k: use u64 for cached BSS change flags
+A third, 9f9eb662a (complete regd_update_completed on dropped reg
+events), is in 7.3.6 as 4e566abff512.
+---
+ drivers/net/wireless/ath/ath12k/core.h | 2 +-
+ drivers/net/wireless/ath/ath12k/qmi.c  | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/wireless/ath/ath12k/core.h b/drivers/net/wireless/ath/ath12k/core.h
+index b8fc06825..d68b08556 100644
+--- a/drivers/net/wireless/ath/ath12k/core.h
++++ b/drivers/net/wireless/ath/ath12k/core.h
+@@ -292,7 +292,7 @@ struct ath12k_key_conf {
+ struct ath12k_vif_cache {
+ 	struct ath12k_tx_conf tx_conf;
+ 	struct ath12k_key_conf key_conf;
+-	u32 bss_conf_changed;
++	u64 bss_conf_changed;
+ };
+ 
+ struct ath12k_rekey_data {
+diff --git a/drivers/net/wireless/ath/ath12k/qmi.c b/drivers/net/wireless/ath/ath12k/qmi.c
+index 8c7c1936f..7b1c46698 100644
+--- a/drivers/net/wireless/ath/ath12k/qmi.c
++++ b/drivers/net/wireless/ath/ath12k/qmi.c
+@@ -3777,7 +3777,7 @@ static int ath12k_qmi_wlanfw_wlan_ini_send(struct ath12k_base *ab)
+ 	int ret;
+ 
+ 	req.enable_fwlog_valid = true;
+-	req.enable_fwlog = 1;
++	req.enable_fwlog = IS_ENABLED(CONFIG_ATH12K_TRACING) ? 1 : 0;
+ 
+ 	ret = qmi_txn_init(&ab->qmi.handle, &txn,
+ 			   qmi_wlanfw_wlan_ini_resp_msg_v01_ei, &resp);

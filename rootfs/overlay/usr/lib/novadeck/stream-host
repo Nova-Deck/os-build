@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# stream-host — what a paired host's Steam tile runs: stream that host, as the packaged .desktop would
+# run Moonlight (packages/moonlight-qt/PKGBUILD says what the two variables do).
+#
+#   stream-host <host id>
+#
+# The id, not the name or address: those change, and Moonlight finds the host by any of them.
+set -euo pipefail
+
+MOONLIGHT="${MOONLIGHT:-/usr/bin/moonlight}"
+UUID='^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$'
+
+[[ $# -eq 1 && $1 =~ $UUID ]] || { echo "usage: stream-host <host id>" >&2; exit 2; }
+exec env LIBVA_DRIVER_NAME=qcom HAS_DESKTOP_ENVIRONMENT=0 "$MOONLIGHT" stream "$1" Desktop

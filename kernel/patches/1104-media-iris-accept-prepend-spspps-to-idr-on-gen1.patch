@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Sat, 21 Nov 2026 11:00:00 +0100
+Subject: [PATCH] media: iris: accept PREPEND_SPSPPS_TO_IDR on gen1
+
+Streaming hosts ask the encoder for SPS/PPS in front of every IDR, so a
+client can join, or recover, at any keyframe. VA-API drivers over V4L2
+set V4L2_CID_MPEG_VIDEO_PREPEND_SPSPPS_TO_IDR and give up when it fails.
+Gen2 has the control; gen1 (SM8250) returns -EINVAL.
+
+The gen1 firmware already does it. HFI_PROPERTY_CONFIG_VENC_SYNC_FRAME_
+SEQUENCE_HEADER is one switch, a sequence header with every sync frame,
+and HEADER_MODE_JOINED_WITH_1ST_FRAME (the default) turns it on. On
+SM8250 every IDR asked for with FORCE_KEY_FRAME comes out with SPS and
+PPS in front of it.
+
+Add the cap to the gen1 encoder and turn the switch on when it is set,
+whatever the header mode, as gen2 does. Nothing changes for a client
+that leaves it at 0.
+
+Signed-off-by: Philippe Simons <simons.philippe@gmail.com>
+---
+diff --git a/drivers/media/platform/qcom/iris/iris_ctrls.c b/drivers/media/platform/qcom/iris/iris_ctrls.c
+index 073378e..de720c3 100644
+--- a/drivers/media/platform/qcom/iris/iris_ctrls.c
++++ b/drivers/media/platform/qcom/iris/iris_ctrls.c
+@@ -661,14 +661,21 @@ int iris_set_profile_level_gen1(struct iris_inst *inst, enum platform_inst_fw_ca
+ int iris_set_header_mode_gen1(struct iris_inst *inst, enum platform_inst_fw_cap_type cap_id)
+ {
+ 	const struct iris_hfi_session_ops *hfi_ops = inst->hfi_session_ops;
++	u32 prepend_sps_pps = inst->fw_caps[PREPEND_SPSPPS_TO_IDR].value;
+ 	u32 header_mode = inst->fw_caps[cap_id].value;
+ 	u32 hfi_id = inst->fw_caps[cap_id].hfi_id;
+ 	u32 hfi_val;
+ 
+-	if (header_mode == V4L2_MPEG_VIDEO_HEADER_MODE_SEPARATE)
+-		hfi_val = 0;
+-	else
++	/*
++	 * Gen1 has a single switch: a sequence header with every sync frame.
++	 * Joined mode already turns it on, so prepending to each IDR is the
++	 * same setting.
++	 */
++	if (prepend_sps_pps ||
++	    header_mode == V4L2_MPEG_VIDEO_HEADER_MODE_JOINED_WITH_1ST_FRAME)
+ 		hfi_val = 1;
++	else
++		hfi_val = 0;
+ 
+ 	return hfi_ops->session_set_property(inst, hfi_id,
+ 					 HFI_HOST_FLAGS_NONE,
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen1.c b/drivers/media/platform/qcom/iris/iris_hfi_gen1.c
+index b11a31e..2ed8d76 100644
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen1.c
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen1.c
+@@ -127,6 +127,13 @@ static const struct platform_inst_fw_cap inst_fw_cap_sm8250_enc[] = {
+ 		.flags = CAP_FLAG_OUTPUT_PORT | CAP_FLAG_MENU,
+ 		.set = iris_set_header_mode_gen1,
+ 	},
++	{
++		.cap_id = PREPEND_SPSPPS_TO_IDR,
++		.min = 0,
++		.max = 1,
++		.step_or_mask = 1,
++		.value = 0,
++	},
+ 	{
+ 		.cap_id = BITRATE,
+ 		.min = BITRATE_MIN,

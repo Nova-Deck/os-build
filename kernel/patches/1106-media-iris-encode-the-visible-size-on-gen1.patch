@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Sat, 21 Nov 2026 12:30:00 +0100
+Subject: [PATCH] media: iris: encode the visible size on gen1
+
+A 1920x1080 encode on SM8250 comes out 1920x1088, with no cropping in
+the SPS, so a client shows eight rows of junk at the bottom. Setting the
+crop with VIDIOC_S_SELECTION makes no difference.
+
+Gen1 sends HFI_PROPERTY_PARAM_FRAME_SIZE from fmt_src and fmt_dst, which
+are aligned to 32 and 16. Venus drives the same HFI and sends the
+visible size on both ports instead; the aligned layout already goes to
+the firmware in UNCOMPRESSED_PLANE_ACTUAL_INFO, and the firmware writes
+the frame cropping into the SPS. Gen2 gets the same result from
+HFI_PROP_CROP_OFFSETS.
+
+Send the crop rectangle (no larger than the raw size) on the input port
+and the unaligned scaled size on the output port. The decoder is
+unchanged.
+
+Signed-off-by: Philippe Simons <simons.philippe@gmail.com>
+---
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen1_command.c b/drivers/media/platform/qcom/iris/iris_hfi_gen1_command.c
+index 2e249c5..fb7434b 100644
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen1_command.c
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen1_command.c
+@@ -794,12 +794,42 @@ static int iris_hfi_gen1_session_set_property(struct iris_inst *inst, u32 packet
+ 	return hfi_gen1_set_property(inst, packet_type, payload, payload_size);
+ }
+ 
++/*
++ * As venus does: the visible size goes to the firmware on both ports, the
++ * aligned buffer layout goes in UNCOMPRESSED_PLANE_ACTUAL_INFO, and the
++ * firmware crops the bitstream to the visible size. Sending the aligned
++ * CAPTURE size instead made a 1080p stream 1088 lines tall.
++ */
++static int iris_hfi_gen1_set_enc_resolution(struct iris_inst *inst)
++{
++	u32 ptype = HFI_PROPERTY_PARAM_FRAME_SIZE;
++	struct hfi_framesize fs;
++	int ret;
++
++	fs.buffer_type = HFI_BUFFER_INPUT;
++	fs.width = min(inst->crop.width, inst->enc_raw_width);
++	fs.height = min(inst->crop.height, inst->enc_raw_height);
++
++	ret = hfi_gen1_set_property(inst, ptype, &fs, sizeof(fs));
++	if (ret)
++		return ret;
++
++	fs.buffer_type = HFI_BUFFER_OUTPUT;
++	fs.width = inst->enc_scale_width;
++	fs.height = inst->enc_scale_height;
++
++	return hfi_gen1_set_property(inst, ptype, &fs, sizeof(fs));
++}
++
+ static int iris_hfi_gen1_set_resolution(struct iris_inst *inst, u32 plane)
+ {
+ 	u32 ptype = HFI_PROPERTY_PARAM_FRAME_SIZE;
+ 	struct hfi_framesize fs;
+ 	int ret;
+ 
++	if (inst->domain == ENCODER)
++		return iris_hfi_gen1_set_enc_resolution(inst);
++
+ 	if (!iris_drc_pending(inst) && !(inst->sub_state & IRIS_INST_SUB_FIRST_IPSC)) {
+ 		fs.buffer_type = HFI_BUFFER_INPUT;
+ 		fs.width = inst->fmt_src->fmt.pix_mp.width;

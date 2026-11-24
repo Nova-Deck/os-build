@@ -21,6 +21,7 @@ const TABS: { id: string; store: StoreId; title: string }[] = [
   { id: "novadeck-epic", store: "epic", title: "Epic" },
   { id: "novadeck-gog", store: "gog", title: "GOG" },
 ];
+const OUR_TABS = new Set(TABS.map((t) => t.id));
 // Ours go right after this one of Steam's (or at the end, should a client rename it).
 const AFTER_TAB = "Installed";
 
@@ -133,7 +134,7 @@ function spliceTabs(result: unknown, deps: unknown[]): unknown {
   const isTuple = Array.isArray(result[0]);
   const tabs = (isTuple ? result[0] : result) as SteamTab[];
   if (!tabs[0]?.id || !tabs[0]?.content) return result;
-  if (tabs.some((t) => t.id?.startsWith("novadeck-"))) return result; // already ours this render
+  if (tabs.some((t) => OUR_TABS.has(t.id))) return result; // already ours this render
 
   const template = tabs.find((t) => t.id === "AllGames");
   if (!template) return bail("no AllGames tab to copy", result);
@@ -209,19 +210,21 @@ type Elt = ReactElement & { type: any };
 export function applyLibraryTabsPatch(): () => void {
   const patch = routerHook.addPatch("/library", (props: any) => {
     if (isTabMasterInstalled()) return props;
-    // A re-render of the library when the members change (refreshLibraryTabs).
-    const [, setTick] = useState(0);
-    useEffect(() => {
-      const l = () => setTick((v) => v + 1);
-      listeners.add(l);
-      return () => void listeners.delete(l);
-    }, []);
-
+    // No hook out here: Decky calls this inside its ROUTER's render, where hooks count as the
+    // router's, and a second plugin adding some after the first render takes Steam's UI down (React
+    // error 310). The function patched below is the page's component, made anew on every such pass.
     afterPatch(props.children, "type", (_: unknown[], ret1: Elt) => {
-      if (!ret1?.type) return ret1;
+      // A re-render of the library when the members change (refreshLibraryTabs).
+      const [, setTick] = useState(0);
+      useEffect(() => {
+        const l = () => setTick((v) => v + 1);
+        listeners.add(l);
+        return () => void listeners.delete(l);
+      }, []);
       let inner: Patch | undefined;
       let memoCache: unknown;
       useEffect(() => () => inner?.unpatch());
+      if (!ret1?.type) return ret1;
       afterPatch(ret1, "type", (_2: unknown[], ret2: Elt) => {
         if (!ret2?.type) return ret2;
         if (memoCache) {

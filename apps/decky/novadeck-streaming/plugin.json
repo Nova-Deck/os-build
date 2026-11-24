@@ -1,0 +1,6 @@
+{
+  "name": "NovaDeck Streaming",
+  "author": "novadeck",
+  "flags": ["root"],
+  "api_version": 1
+}

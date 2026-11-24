@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# sunshine-start — novadeck-sunshine.service's main process: Sunshine, named after the device.
+#
+# Guests see this name. Sunshine's default is the hostname, which is the same on every novadeck. A
+# sunshine_name in the config wins. exec, so that Sunshine itself is the main process and gets the
+# unit's ambient capability.
+set -uo pipefail
+
+SUNSHINE="${SUNSHINE:-/usr/bin/sunshine}"
+CONF="${CONF:-/etc/novadeck/sunshine.conf}"
+MODEL="${MODEL:-/proc/device-tree/model}"
+
+# The device tree ends the string with a NUL. Sunshine parses the argument as a config line, so
+# nothing that could end the value or start another option stays in it.
+name="$(tr '\0' '\n' <"$MODEL" 2>/dev/null | tr -c 'A-Za-z0-9 ._()+/-' ' ' | tr -s ' ')"
+name="${name# }"
+name="${name% }"
+
+if [[ -z $name ]] || grep -qE '^[[:space:]]*sunshine_name[[:space:]]*=' "$CONF"; then
+    exec "$SUNSHINE" "$CONF"
+fi
+exec "$SUNSHINE" "$CONF" "sunshine_name=$name"

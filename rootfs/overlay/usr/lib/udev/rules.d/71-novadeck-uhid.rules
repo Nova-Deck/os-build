@@ -1,0 +1,12 @@
+# novadeck uhid access — only while this device hosts a stream.
+#
+# The sunshine package opens /dev/uhid to group `input` and to the session (60-sunshine.rules), at every
+# boot. Whoever can open it can create an input device with any descriptor, which the kernel's HID
+# drivers then parse. Only a host needs it, for its guests' gamepads: novadeck-sunshine.service opens it
+# for deck when it starts and closes it when it stops.
+#
+# After 60-sunshine.rules, and before 73-seat-late.rules, which is what acts on the uaccess tag.
+# A udev change event on the node while hosting would reset MODE, and with it the access the service gave.
+# Nothing here sends one; restarting the host gives it back.
+# /dev/uinput stays open: Steam Input needs it (70-novadeck-uinput.rules).
+KERNEL=="uhid", GROUP="root", MODE="0600", TAG-="uaccess"

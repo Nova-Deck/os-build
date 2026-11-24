@@ -1,0 +1,84 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Sat, 21 Nov 2026 13:00:00 +0100
+Subject: [PATCH] media: iris: decode order output on gen1
+
+VA-API drivers over V4L2 decode in decode order: they set
+V4L2_CID_MPEG_VIDEO_DEC_DISPLAY_DELAY_ENABLE with a delay of 0 and give
+up when the controls are missing. The gen2 decoder has them; gen1
+(SM8250) does not.
+
+Venus does this on the same HFI with HFI_PROPERTY_PARAM_VDEC_OUTPUT_ORDER
+= HFI_OUTPUT_ORDER_DECODE when the delay is enabled and 0. Add the two
+controls to the gen1 decoder and pack the property, reusing
+iris_set_decode_order(), which sends nothing until a client sets the
+control. The gen1 decoder already takes the shared stage and clock
+choice that decode order selects.
+
+Signed-off-by: Philippe Simons <simons.philippe@gmail.com>
+---
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen1.c b/drivers/media/platform/qcom/iris/iris_hfi_gen1.c
+index 2ed8d76..9bbffca 100644
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen1.c
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen1.c
+@@ -30,6 +30,23 @@ static struct platform_inst_fw_cap inst_fw_cap_sm8250_dec[] = {
+ 		.hfi_id = HFI_PROPERTY_PARAM_WORK_MODE,
+ 		.set = iris_set_stage,
+ 	},
++	{
++		.cap_id = DISPLAY_DELAY_ENABLE,
++		.min = 0,
++		.max = 1,
++		.step_or_mask = 1,
++		.value = 0,
++		.hfi_id = HFI_PROPERTY_PARAM_VDEC_OUTPUT_ORDER,
++		.flags = CAP_FLAG_INPUT_PORT,
++		.set = iris_set_decode_order,
++	},
++	{
++		.cap_id = DISPLAY_DELAY,
++		.min = 0,
++		.max = 16383,
++		.step_or_mask = 1,
++		.value = 0,
++	},
+ };
+ 
+ static const struct platform_inst_fw_cap inst_fw_cap_sm8250_enc[] = {
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen1_command.c b/drivers/media/platform/qcom/iris/iris_hfi_gen1_command.c
+index fb7434b..bdcf106 100644
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen1_command.c
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen1_command.c
+@@ -735,6 +735,14 @@ iris_hfi_gen1_packet_session_set_property(struct hfi_session_set_property_pkt *p
+ 		packet->shdr.hdr.size += sizeof(*intra_period);
+ 		break;
+ 	}
++	case HFI_PROPERTY_PARAM_VDEC_OUTPUT_ORDER: {
++		u32 *in = pdata;
++
++		/* iris_set_decode_order() passes a bool */
++		packet->data[1] = *in ? HFI_OUTPUT_ORDER_DECODE : HFI_OUTPUT_ORDER_DISPLAY;
++		packet->shdr.hdr.size += sizeof(u32);
++		break;
++	}
+ 	case HFI_PROPERTY_PARAM_VENC_HIER_P_MAX_NUM_ENH_LAYER: {
+ 		u32 *in = pdata;
+ 
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen1_defines.h b/drivers/media/platform/qcom/iris/iris_hfi_gen1_defines.h
+index fb3b3f1..0c8fc55 100644
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen1_defines.h
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen1_defines.h
+@@ -68,9 +68,13 @@
+ 
+ #define HFI_PROPERTY_CONFIG_BUFFER_REQUIREMENTS		0x202001
+ 
++#define HFI_PROPERTY_PARAM_VDEC_OUTPUT_ORDER		0x1203005
+ #define HFI_PROPERTY_PARAM_VDEC_DPB_COUNTS		0x120300e
+ #define HFI_PROPERTY_CONFIG_VDEC_ENTROPY		0x1204004
+ 
++#define HFI_OUTPUT_ORDER_DISPLAY			0x1000001
++#define HFI_OUTPUT_ORDER_DECODE				0x1000002
++
+ #define HFI_BUFFER_INPUT				0x1
+ #define HFI_BUFFER_OUTPUT				0x2
+ #define HFI_BUFFER_OUTPUT2				0x3

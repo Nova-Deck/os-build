@@ -1,0 +1,475 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xilin Wu <sophon@radxa.com>
+Date: Thu, 29 Oct 2026 11:58:05 +0800
+Subject: [PATCH] media: iris: HFI gen2 features and fixes for VA-API
+
+Xilin Wu, "[PATCH 0/5] media: iris: HFI gen2 features and fixes for
+VA-API" v1, <20261029-iris-va-fixes-v1-0-44a2783f782b@radxa.com>,
+patches 2-5 squashed. They make qcom-va-driver work on gen2:
+
+2/5 media: iris: allow larger capture buffer pools on HFI gen2
+    <20261029-iris-va-fixes-v1-2-44a2783f782b@radxa.com>
+3/5 media: iris: Add deblocking filter controls for HFI gen2
+    <20261029-iris-va-fixes-v1-3-44a2783f782b@radxa.com>
+4/5 media: iris: Preserve timestamps on error buffers
+    <20261029-iris-va-fixes-v1-4-44a2783f782b@radxa.com>
+    Reviewed-by: Bryan O'Donoghue <bryan.odonoghue@linaro.org>
+5/5 media: iris: Recycle decoder buffers for non-display pictures
+    <20261029-iris-va-fixes-v1-5-44a2783f782b@radxa.com>
+
+1/5 (decode-order output on gen2, Ack Nicolas Dufresne) is NOT taken:
+1092 adds the same two controls and the same HFI_PROP_DECODE_ORDER_OUTPUT,
+sent only once a client sets them, to inst_fw_cap_sm8550_dec, the
+decoder table of every gen2 SoC novadeck ships. 1/5 also covers Milos,
+which no board uses.
+
+Bodies identical, except 5/5's last hunk in
+iris_hfi_gen2_handle_output_buffer(), placed by hand: 1102 had already
+widened the zero-size error check to PSC_LAST. 5/5 rewrites that check as
+buf->flags & V4L2_BUF_FLAG_LAST, which iris_hfi_gen2_get_driver_buffer_flags()
+sets for both LAST and PSC_LAST, so 1102's behaviour is kept.
+
+Review on the list (open as of 2026-11-21): 2/5, why decoder-only and why
+not keep the maximum in the platform data; 5/5, fluster results asked
+for. Bryan O'Donoghue, 2026-11-17: "close to mergable".
+
+Signed-off-by: Xilin Wu <sophon@radxa.com>
+---
+diff --git a/drivers/media/platform/qcom/iris/iris_buffer.c b/drivers/media/platform/qcom/iris/iris_buffer.c
+index c8823bb..87b3fb2 100644
+--- a/drivers/media/platform/qcom/iris/iris_buffer.c
++++ b/drivers/media/platform/qcom/iris/iris_buffer.c
+@@ -916,7 +916,8 @@ int iris_vb2_buffer_done(struct iris_inst *inst, struct iris_buffer *buf)
+ 	if (buf->flags & V4L2_BUF_FLAG_ERROR) {
+ 		state = VB2_BUF_STATE_ERROR;
+ 		vb2_set_plane_payload(vb2, 0, 0);
+-		vb2->timestamp = 0;
++		/* Allow userspace to associate the error with the input frame. */
++		vb2->timestamp = buf->timestamp;
+ 		v4l2_m2m_buf_done(vbuf, state);
+ 		return 0;
+ 	}
+diff --git a/drivers/media/platform/qcom/iris/iris_ctrls.c b/drivers/media/platform/qcom/iris/iris_ctrls.c
+index de720c3..6e0f6c8 100644
+--- a/drivers/media/platform/qcom/iris/iris_ctrls.c
++++ b/drivers/media/platform/qcom/iris/iris_ctrls.c
+@@ -59,6 +59,18 @@ static enum platform_inst_fw_cap_type iris_get_cap_id(u32 id)
+ 		return GOP_SIZE;
+ 	case V4L2_CID_MPEG_VIDEO_H264_ENTROPY_MODE:
+ 		return ENTROPY_MODE;
++	case V4L2_CID_MPEG_VIDEO_H264_LOOP_FILTER_MODE:
++		return DEBLOCK_MODE_H264;
++	case V4L2_CID_MPEG_VIDEO_H264_LOOP_FILTER_ALPHA:
++		return DEBLOCK_ALPHA_H264;
++	case V4L2_CID_MPEG_VIDEO_H264_LOOP_FILTER_BETA:
++		return DEBLOCK_BETA_H264;
++	case V4L2_CID_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE:
++		return DEBLOCK_MODE_HEVC;
++	case V4L2_CID_MPEG_VIDEO_HEVC_LF_TC_OFFSET_DIV2:
++		return DEBLOCK_TC_HEVC;
++	case V4L2_CID_MPEG_VIDEO_HEVC_LF_BETA_OFFSET_DIV2:
++		return DEBLOCK_BETA_HEVC;
+ 	case V4L2_CID_MPEG_VIDEO_H264_MIN_QP:
+ 		return MIN_FRAME_QP_H264;
+ 	case V4L2_CID_MPEG_VIDEO_HEVC_MIN_QP:
+@@ -208,6 +220,18 @@ static u32 iris_get_v4l2_id(enum platform_inst_fw_cap_type cap_id)
+ 		return V4L2_CID_MPEG_VIDEO_GOP_SIZE;
+ 	case ENTROPY_MODE:
+ 		return V4L2_CID_MPEG_VIDEO_H264_ENTROPY_MODE;
++	case DEBLOCK_MODE_H264:
++		return V4L2_CID_MPEG_VIDEO_H264_LOOP_FILTER_MODE;
++	case DEBLOCK_ALPHA_H264:
++		return V4L2_CID_MPEG_VIDEO_H264_LOOP_FILTER_ALPHA;
++	case DEBLOCK_BETA_H264:
++		return V4L2_CID_MPEG_VIDEO_H264_LOOP_FILTER_BETA;
++	case DEBLOCK_MODE_HEVC:
++		return V4L2_CID_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE;
++	case DEBLOCK_TC_HEVC:
++		return V4L2_CID_MPEG_VIDEO_HEVC_LF_TC_OFFSET_DIV2;
++	case DEBLOCK_BETA_HEVC:
++		return V4L2_CID_MPEG_VIDEO_HEVC_LF_BETA_OFFSET_DIV2;
+ 	case MIN_FRAME_QP_H264:
+ 		return V4L2_CID_MPEG_VIDEO_H264_MIN_QP;
+ 	case MIN_FRAME_QP_HEVC:
+@@ -914,6 +938,67 @@ int iris_set_entropy_mode_gen2(struct iris_inst *inst, enum platform_inst_fw_cap
+ 				     &entropy_mode, sizeof(u32));
+ }
+ 
++int iris_set_deblock_gen2(struct iris_inst *inst, enum platform_inst_fw_cap_type cap_id)
++{
++	const struct iris_hfi_session_ops *hfi_ops = inst->hfi_session_ops;
++	u32 hfi_id = inst->fw_caps[cap_id].hfi_id;
++	u32 mode = inst->fw_caps[cap_id].value;
++	u32 alpha_tc, beta, hfi_value;
++
++	if (inst->codec == V4L2_PIX_FMT_H264) {
++		if (cap_id != DEBLOCK_MODE_H264)
++			return 0;
++
++		switch (mode) {
++		case V4L2_MPEG_VIDEO_H264_LOOP_FILTER_MODE_ENABLED:
++			mode = HFI_DEBLOCK_ALL_BOUNDARY;
++			break;
++		case V4L2_MPEG_VIDEO_H264_LOOP_FILTER_MODE_DISABLED:
++			mode = HFI_DEBLOCK_DISABLE;
++			break;
++		case V4L2_MPEG_VIDEO_H264_LOOP_FILTER_MODE_DISABLED_AT_SLICE_BOUNDARY:
++			mode = HFI_DEBLOCK_DISABLE_AT_SLICE_BOUNDARY;
++			break;
++		default:
++			return -EINVAL;
++		}
++
++		alpha_tc = inst->fw_caps[DEBLOCK_ALPHA_H264].value + 6;
++		beta = inst->fw_caps[DEBLOCK_BETA_H264].value + 6;
++	} else if (inst->codec == V4L2_PIX_FMT_HEVC) {
++		if (cap_id != DEBLOCK_MODE_HEVC)
++			return 0;
++
++		switch (mode) {
++		case V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_ENABLED:
++			mode = HFI_DEBLOCK_ALL_BOUNDARY;
++			break;
++		case V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_DISABLED:
++			mode = HFI_DEBLOCK_DISABLE;
++			break;
++		case V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_DISABLED_AT_SLICE_BOUNDARY:
++			mode = HFI_DEBLOCK_DISABLE_AT_SLICE_BOUNDARY;
++			break;
++		default:
++			return -EINVAL;
++		}
++
++		alpha_tc = inst->fw_caps[DEBLOCK_TC_HEVC].value + 6;
++		beta = inst->fw_caps[DEBLOCK_BETA_HEVC].value + 6;
++	} else {
++		return 0;
++	}
++
++	/* Firmware expects offsets biased by 6, with alpha or HEVC tc in bits 23:16. */
++	hfi_value = alpha_tc << 16 | beta << 8 | mode;
++
++	return hfi_ops->session_set_property(inst, hfi_id,
++					     HFI_HOST_FLAGS_NONE,
++					     iris_get_port_info(inst, cap_id),
++					     HFI_PAYLOAD_32_PACKED,
++					     &hfi_value, sizeof(hfi_value));
++}
++
+ int iris_set_min_qp(struct iris_inst *inst, enum platform_inst_fw_cap_type cap_id)
+ {
+ 	const struct iris_hfi_session_ops *hfi_ops = inst->hfi_session_ops;
+diff --git a/drivers/media/platform/qcom/iris/iris_ctrls.h b/drivers/media/platform/qcom/iris/iris_ctrls.h
+index ab89bea..3661483 100644
+--- a/drivers/media/platform/qcom/iris/iris_ctrls.h
++++ b/drivers/media/platform/qcom/iris/iris_ctrls.h
+@@ -31,6 +31,7 @@ int iris_set_bitrate_mode_gen1(struct iris_inst *inst, enum platform_inst_fw_cap
+ int iris_set_bitrate_mode_gen2(struct iris_inst *inst, enum platform_inst_fw_cap_type cap_id);
+ int iris_set_entropy_mode_gen1(struct iris_inst *inst, enum platform_inst_fw_cap_type cap_id);
+ int iris_set_entropy_mode_gen2(struct iris_inst *inst, enum platform_inst_fw_cap_type cap_id);
++int iris_set_deblock_gen2(struct iris_inst *inst, enum platform_inst_fw_cap_type cap_id);
+ int iris_set_min_qp(struct iris_inst *inst, enum platform_inst_fw_cap_type cap_id);
+ int iris_set_max_qp(struct iris_inst *inst, enum platform_inst_fw_cap_type cap_id);
+ int iris_set_frame_qp(struct iris_inst *inst, enum platform_inst_fw_cap_type cap_id);
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen2.c b/drivers/media/platform/qcom/iris/iris_hfi_gen2.c
+index 4e141e6..c727f3a 100644
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen2.c
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen2.c
+@@ -353,6 +353,64 @@ static const struct platform_inst_fw_cap inst_fw_cap_milos_enc[] = {
+ 		.flags = CAP_FLAG_OUTPUT_PORT | CAP_FLAG_MENU,
+ 		.set = iris_set_entropy_mode_gen2,
+ 	},
++	{
++		.cap_id = DEBLOCK_MODE_H264,
++		.min = V4L2_MPEG_VIDEO_H264_LOOP_FILTER_MODE_ENABLED,
++		.max = V4L2_MPEG_VIDEO_H264_LOOP_FILTER_MODE_DISABLED_AT_SLICE_BOUNDARY,
++		.step_or_mask =
++			BIT(V4L2_MPEG_VIDEO_H264_LOOP_FILTER_MODE_ENABLED) |
++			BIT(V4L2_MPEG_VIDEO_H264_LOOP_FILTER_MODE_DISABLED) |
++			BIT(V4L2_MPEG_VIDEO_H264_LOOP_FILTER_MODE_DISABLED_AT_SLICE_BOUNDARY),
++		.value = V4L2_MPEG_VIDEO_H264_LOOP_FILTER_MODE_ENABLED,
++		.hfi_id = HFI_PROP_DEBLOCKING_MODE,
++		.flags = CAP_FLAG_OUTPUT_PORT | CAP_FLAG_MENU,
++		.set = iris_set_deblock_gen2,
++	},
++	{
++		.cap_id = DEBLOCK_ALPHA_H264,
++		.min = -6,
++		.max = 6,
++		.step_or_mask = 1,
++		.value = 0,
++		.flags = CAP_FLAG_OUTPUT_PORT,
++	},
++	{
++		.cap_id = DEBLOCK_BETA_H264,
++		.min = -6,
++		.max = 6,
++		.step_or_mask = 1,
++		.value = 0,
++		.flags = CAP_FLAG_OUTPUT_PORT,
++	},
++	{
++		.cap_id = DEBLOCK_MODE_HEVC,
++		.min = V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_DISABLED,
++		.max = V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_DISABLED_AT_SLICE_BOUNDARY,
++		.step_or_mask =
++			BIT(V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_ENABLED) |
++			BIT(V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_DISABLED) |
++			BIT(V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_DISABLED_AT_SLICE_BOUNDARY),
++		.value = V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_ENABLED,
++		.hfi_id = HFI_PROP_DEBLOCKING_MODE,
++		.flags = CAP_FLAG_OUTPUT_PORT | CAP_FLAG_MENU,
++		.set = iris_set_deblock_gen2,
++	},
++	{
++		.cap_id = DEBLOCK_TC_HEVC,
++		.min = -6,
++		.max = 6,
++		.step_or_mask = 1,
++		.value = 0,
++		.flags = CAP_FLAG_OUTPUT_PORT,
++	},
++	{
++		.cap_id = DEBLOCK_BETA_HEVC,
++		.min = -6,
++		.max = 6,
++		.step_or_mask = 1,
++		.value = 0,
++		.flags = CAP_FLAG_OUTPUT_PORT,
++	},
+ 	{
+ 		.cap_id = MIN_FRAME_QP_H264,
+ 		.min = MIN_QP_8BIT,
+@@ -1305,6 +1363,64 @@ static const struct platform_inst_fw_cap inst_fw_cap_sm8550_enc[] = {
+ 		.flags = CAP_FLAG_OUTPUT_PORT | CAP_FLAG_MENU,
+ 		.set = iris_set_entropy_mode_gen2,
+ 	},
++	{
++		.cap_id = DEBLOCK_MODE_H264,
++		.min = V4L2_MPEG_VIDEO_H264_LOOP_FILTER_MODE_ENABLED,
++		.max = V4L2_MPEG_VIDEO_H264_LOOP_FILTER_MODE_DISABLED_AT_SLICE_BOUNDARY,
++		.step_or_mask =
++			BIT(V4L2_MPEG_VIDEO_H264_LOOP_FILTER_MODE_ENABLED) |
++			BIT(V4L2_MPEG_VIDEO_H264_LOOP_FILTER_MODE_DISABLED) |
++			BIT(V4L2_MPEG_VIDEO_H264_LOOP_FILTER_MODE_DISABLED_AT_SLICE_BOUNDARY),
++		.value = V4L2_MPEG_VIDEO_H264_LOOP_FILTER_MODE_ENABLED,
++		.hfi_id = HFI_PROP_DEBLOCKING_MODE,
++		.flags = CAP_FLAG_OUTPUT_PORT | CAP_FLAG_MENU,
++		.set = iris_set_deblock_gen2,
++	},
++	{
++		.cap_id = DEBLOCK_ALPHA_H264,
++		.min = -6,
++		.max = 6,
++		.step_or_mask = 1,
++		.value = 0,
++		.flags = CAP_FLAG_OUTPUT_PORT,
++	},
++	{
++		.cap_id = DEBLOCK_BETA_H264,
++		.min = -6,
++		.max = 6,
++		.step_or_mask = 1,
++		.value = 0,
++		.flags = CAP_FLAG_OUTPUT_PORT,
++	},
++	{
++		.cap_id = DEBLOCK_MODE_HEVC,
++		.min = V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_DISABLED,
++		.max = V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_DISABLED_AT_SLICE_BOUNDARY,
++		.step_or_mask =
++			BIT(V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_ENABLED) |
++			BIT(V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_DISABLED) |
++			BIT(V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_DISABLED_AT_SLICE_BOUNDARY),
++		.value = V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_ENABLED,
++		.hfi_id = HFI_PROP_DEBLOCKING_MODE,
++		.flags = CAP_FLAG_OUTPUT_PORT | CAP_FLAG_MENU,
++		.set = iris_set_deblock_gen2,
++	},
++	{
++		.cap_id = DEBLOCK_TC_HEVC,
++		.min = -6,
++		.max = 6,
++		.step_or_mask = 1,
++		.value = 0,
++		.flags = CAP_FLAG_OUTPUT_PORT,
++	},
++	{
++		.cap_id = DEBLOCK_BETA_HEVC,
++		.min = -6,
++		.max = 6,
++		.step_or_mask = 1,
++		.value = 0,
++		.flags = CAP_FLAG_OUTPUT_PORT,
++	},
+ 	{
+ 		.cap_id = MIN_FRAME_QP_H264,
+ 		.min = MIN_QP_8BIT,
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen2.h b/drivers/media/platform/qcom/iris/iris_hfi_gen2.h
+index 21ab58e..79aac2d 100644
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen2.h
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen2.h
+@@ -20,6 +20,7 @@ struct iris_core;
+  * @packet: HFI packet
+  * @ipsc_properties_set: boolean to set ipsc properties to fw
+  * @opsc_properties_set: boolean to set opsc properties to fw
++ * @output_stopping: capture STOP command is awaiting its response
+  * @hfi_frame_info: structure of frame info
+  * @src_subcr_params: subscription params to fw on input port
+  * @dst_subcr_params: subscription params to fw on output port
+@@ -29,6 +30,7 @@ struct iris_inst_hfi_gen2 {
+ 	struct iris_hfi_header		*packet;
+ 	bool				ipsc_properties_set;
+ 	bool				opsc_properties_set;
++	bool				output_stopping;
+ 	struct iris_hfi_frame_info	hfi_frame_info;
+ 	struct hfi_subscription_params	src_subcr_params;
+ 	struct hfi_subscription_params	dst_subcr_params;
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen2_command.c b/drivers/media/platform/qcom/iris/iris_hfi_gen2_command.c
+index 9e6358a..8cc311c 100644
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen2_command.c
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen2_command.c
+@@ -1161,7 +1161,16 @@ static int iris_hfi_gen2_session_stop(struct iris_inst *inst, u32 plane)
+ 	if (ret)
+ 		return ret;
+ 
+-	return iris_wait_for_session_response(inst, false);
++	/* The response wait drops inst->lock, allowing buffers to be returned. */
++	if (plane == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
++		inst_hfi_gen2->output_stopping = true;
++
++	ret = iris_wait_for_session_response(inst, false);
++
++	if (plane == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
++		inst_hfi_gen2->output_stopping = false;
++
++	return ret;
+ }
+ 
+ static int iris_hfi_gen2_session_pause(struct iris_inst *inst, u32 plane)
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen2_defines.h b/drivers/media/platform/qcom/iris/iris_hfi_gen2_defines.h
+index 5a56536..9edd575 100644
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen2_defines.h
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen2_defines.h
+@@ -57,6 +57,14 @@
+ #define HFI_PROP_BUFFER_FW_MIN_OUTPUT_COUNT	0x03000124
+ #define HFI_PROP_PIC_ORDER_CNT_TYPE		0x03000128
+ 
++enum hfi_deblock_mode {
++	HFI_DEBLOCK_ALL_BOUNDARY			= 0x0,
++	HFI_DEBLOCK_DISABLE			= 0x1,
++	HFI_DEBLOCK_DISABLE_AT_SLICE_BOUNDARY	= 0x2,
++};
++
++#define HFI_PROP_DEBLOCKING_MODE			0x03000129
++
+ enum hfi_rate_control {
+ 	HFI_RC_VBR_CFR		= 0x00000000,
+ 	HFI_RC_CBR_CFR		= 0x00000001,
+diff --git a/drivers/media/platform/qcom/iris/iris_hfi_gen2_response.c b/drivers/media/platform/qcom/iris/iris_hfi_gen2_response.c
+index 26fe1b4..990a52a 100644
+--- a/drivers/media/platform/qcom/iris/iris_hfi_gen2_response.c
++++ b/drivers/media/platform/qcom/iris/iris_hfi_gen2_response.c
+@@ -101,9 +101,7 @@ static int iris_hfi_gen2_get_driver_buffer_flags(struct iris_inst *inst, u32 hfi
+ 		HFI_GEN2_PICTURE_CRA | HFI_GEN2_PICTURE_BLA;
+ 	u32 driver_flags = 0;
+ 
+-	if (inst_hfi_gen2->hfi_frame_info.picture_type & HFI_GEN2_PICTURE_NOSHOW)
+-		driver_flags |= V4L2_BUF_FLAG_ERROR;
+-	else if (inst_hfi_gen2->hfi_frame_info.picture_type & keyframe)
++	if (inst_hfi_gen2->hfi_frame_info.picture_type & keyframe)
+ 		driver_flags |= V4L2_BUF_FLAG_KEYFRAME;
+ 	else if (inst_hfi_gen2->hfi_frame_info.picture_type & HFI_GEN2_PICTURE_P)
+ 		driver_flags |= V4L2_BUF_FLAG_PFRAME;
+@@ -345,9 +343,40 @@ static int iris_hfi_gen2_handle_input_buffer(struct iris_inst *inst,
+ 	return 0;
+ }
+ 
++static int iris_hfi_gen2_requeue_output_buffer(struct iris_inst *inst,
++					       struct iris_buffer *buf)
++{
++	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
++	u64 timestamp = buf->timestamp;
++	int ret;
++
++	buf->data_size = 0;
++	buf->timestamp = 0;
++	buf->flags = 0;
++	buf->attr &= ~BUF_ATTR_DEQUEUED;
++	buf->attr |= BUF_ATTR_DEFERRED;
++
++	/* Leave stopped buffers for streamoff cleanup or the next streamon. */
++	if (inst_hfi_gen2->output_stopping ||
++	    (inst->state != IRIS_INST_STREAMING &&
++	     inst->state != IRIS_INST_OUTPUT_STREAMING))
++		return 0;
++
++	ret = iris_queue_buffer(inst, buf);
++	if (ret) {
++		buf->attr &= ~BUF_ATTR_DEFERRED;
++		buf->attr |= BUF_ATTR_DEQUEUED;
++		buf->flags = V4L2_BUF_FLAG_ERROR;
++		buf->timestamp = timestamp;
++	}
++
++	return ret;
++}
++
+ static int iris_hfi_gen2_handle_output_buffer(struct iris_inst *inst,
+ 					      struct iris_hfi_buffer *hfi_buffer)
+ {
++	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+ 	struct v4l2_m2m_ctx *m2m_ctx = inst->m2m_ctx;
+ 	struct v4l2_m2m_buffer *m2m_buffer, *n;
+ 	struct iris_buffer *buf;
+@@ -390,8 +419,18 @@ static int iris_hfi_gen2_handle_output_buffer(struct iris_inst *inst,
+ 
+ 	buf->flags = iris_hfi_gen2_get_driver_buffer_flags(inst, hfi_buffer->flags);
+ 
++	if (inst->domain == DECODER &&
++	    inst_hfi_gen2->hfi_frame_info.picture_type & HFI_GEN2_PICTURE_NOSHOW) {
++		/* A hidden reference picture is neither a display frame nor an error. */
++		buf->data_size = 0;
++		if (inst->state == IRIS_INST_ERROR)
++			buf->flags |= V4L2_BUF_FLAG_ERROR;
++		if (!(buf->flags & (V4L2_BUF_FLAG_ERROR | V4L2_BUF_FLAG_LAST)))
++			return iris_hfi_gen2_requeue_output_buffer(inst, buf);
++	}
++
+ 	if (!buf->data_size && inst->state == IRIS_INST_STREAMING &&
+-	    !(hfi_buffer->flags & (HFI_BUF_FW_FLAG_LAST | HFI_BUF_FW_FLAG_PSC_LAST))) {
++	    !(buf->flags & V4L2_BUF_FLAG_LAST)) {
+ 		buf->flags |= V4L2_BUF_FLAG_ERROR;
+ 	}
+ 
+diff --git a/drivers/media/platform/qcom/iris/iris_platform_common.h b/drivers/media/platform/qcom/iris/iris_platform_common.h
+index d71a6e3..827652e 100644
+--- a/drivers/media/platform/qcom/iris/iris_platform_common.h
++++ b/drivers/media/platform/qcom/iris/iris_platform_common.h
+@@ -138,6 +138,12 @@ enum platform_inst_fw_cap_type {
+ 	FRAME_RC_ENABLE,
+ 	GOP_SIZE,
+ 	ENTROPY_MODE,
++	DEBLOCK_MODE_H264,
++	DEBLOCK_ALPHA_H264,
++	DEBLOCK_BETA_H264,
++	DEBLOCK_MODE_HEVC,
++	DEBLOCK_TC_HEVC,
++	DEBLOCK_BETA_HEVC,
+ 	MIN_FRAME_QP_H264,
+ 	MIN_FRAME_QP_HEVC,
+ 	MAX_FRAME_QP_H264,
+diff --git a/drivers/media/platform/qcom/iris/iris_vidc.c b/drivers/media/platform/qcom/iris/iris_vidc.c
+index ba6dc37..588438f 100644
+--- a/drivers/media/platform/qcom/iris/iris_vidc.c
++++ b/drivers/media/platform/qcom/iris/iris_vidc.c
+@@ -122,6 +122,9 @@ iris_m2m_queue_init(void *priv, struct vb2_queue *src_vq, struct vb2_queue *dst_
+ 	dst_vq->drv_priv = inst;
+ 	dst_vq->buf_struct_size = sizeof(struct iris_buffer);
+ 	dst_vq->min_reqbufs_allocation = MIN_BUFFERS;
++	if (inst->domain == DECODER &&
++	    inst->core->iris_firmware_data == &iris_hfi_gen2_data)
++		dst_vq->max_num_buffers = DEFAULT_MAX_HOST_BUF_COUNT;
+ 	dst_vq->dev = inst->core->dev;
+ 	dst_vq->lock = &inst->ctx_q_lock;
+ 

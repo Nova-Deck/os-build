@@ -1,0 +1,46 @@
+From d278927dc3ffd57133179ea4fc0506bd38039030 Mon Sep 17 00:00:00 2001
+From: Philippe Simons <simons.philippe@gmail.com>
+Date: Sat, 21 Nov 2026 11:40:13 +0100
+Subject: [PATCH] encoder: set the peak bitrate only when Iris has the control
+
+HFI gen1 Iris (SM8250) exposes no V4L2_CID_MPEG_VIDEO_BITRATE_PEAK.
+Every S_CTRL failure is fatal, so each CBR/VBR session failed to open
+there. Query the control first, as the HEVC tier and the deblocking
+controls already are; without it the firmware rate control follows the
+target bitrate.
+---
+ src/encoder.cpp | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/src/encoder.cpp b/src/encoder.cpp
+index 2ab6bc4..2935065 100644
+--- a/src/encoder.cpp
++++ b/src/encoder.cpp
+@@ -366,6 +366,13 @@ struct Encoder::Impl {
+         trace("encoder control id=%#x value=%d", id, value);
+         checked(fd, VIDIOC_S_CTRL, &ctrl, "encoder S_CTRL");
+     }
++    bool has_control(unsigned id) {
++        v4l2_queryctrl query{};
++        query.id = id;
++        int ret = call(fd, VIDIOC_QUERYCTRL, &query);
++        check(ret == 0 || errno == EINVAL, "query encoder control", VA_STATUS_ERROR_ENCODING_ERROR);
++        return ret == 0 && !(query.flags & V4L2_CTRL_FLAG_DISABLED);
++    }
+     void configure_deblocking() {
+         const int ids[] = {settings.hevc ? V4L2_CID_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE
+                                          : V4L2_CID_MPEG_VIDEO_H264_LOOP_FILTER_MODE,
+@@ -648,7 +655,9 @@ Encoder::Encoder(const std::string &device, unsigned width, unsigned height, VAP
+                                                         ? V4L2_MPEG_VIDEO_BITRATE_MODE_CBR
+                                                         : V4L2_MPEG_VIDEO_BITRATE_MODE_VBR);
+         e.control(V4L2_CID_MPEG_VIDEO_BITRATE, s.bitrate);
+-        e.control(V4L2_CID_MPEG_VIDEO_BITRATE_PEAK, s.peak_bitrate);
++        // HFI gen1 (SM8250) has no peak control; its VBR then follows the target alone.
++        if (e.has_control(V4L2_CID_MPEG_VIDEO_BITRATE_PEAK))
++            e.control(V4L2_CID_MPEG_VIDEO_BITRATE_PEAK, s.peak_bitrate);
+     }
+     e.control(s.hevc ? V4L2_CID_MPEG_VIDEO_HEVC_MIN_QP : V4L2_CID_MPEG_VIDEO_H264_MIN_QP, s.min_qp);
+     e.control(s.hevc ? V4L2_CID_MPEG_VIDEO_HEVC_MAX_QP : V4L2_CID_MPEG_VIDEO_H264_MAX_QP, s.max_qp);
+-- 
+2.56.1
+

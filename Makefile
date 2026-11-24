@@ -317,7 +317,7 @@ ASSEMBLE_SRC := $(shell find $(ROOTFS_DIR)/assemble-rootfs.sh $(ROOTFS_DIR)/lib-
 # $(DECKY_DISTS), so a backend-only edit must still bump that plugin's dist mtime (it costs one
 # ~10s no-change npm build) or the re-assembly would silently not happen — the same staleness
 # shape MODE_STAMP exists for.
-DECKY_PLUGINS := novadeck-control novadeck-monitor novadeck-framegen novadeck-stores
+DECKY_PLUGINS := novadeck-control novadeck-monitor novadeck-framegen novadeck-stores novadeck-streaming
 DECKY_DISTS   := $(DECKY_PLUGINS:%=apps/decky/%/dist/index.js)
 decky_src      = $(shell find apps/decky/$(1)/src apps/decky/$(1)/py_modules apps/decky/$(1)/main.py \
                               apps/decky/$(1)/plugin.json apps/decky/$(1)/package.json \
@@ -490,7 +490,7 @@ verify-card: $(SDCARD) | $(BUILD_STAMP) ## Verify the built A/B card image (in c
 verify-lock: ## Check both locks' novadeck rows against packages/ (host, seconds, no build)
 	bash packages/verify-lock-rows.sh
 
-test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/power-led/vpower/suspend/gamescope-display/session/stage-2/partition-table/unit/coredump/perf/cpu-affinity/fan-curve/power-gpu/decky/update/select-branch/publish/install/mkroot/verify-lock/snapshot-drift/steamos-manager/storage/graphics-provider/android-guestos/android-shared/mesa-source/overlay-pkgbuild/video-decode/proton-dxvk/proton-nice/store-cli/store-install/store-shortcuts/store-launch/store-dos-targets/store-dos-swap/store-compat-map/store-requests/store-library/store-artwork/store-gamepage/store-native-page/sysctl/guard suites (host, no build needed)
+test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/power-led/vpower/suspend/gamescope-display/session/stage-2/partition-table/unit/coredump/perf/cpu-affinity/fan-curve/power-gpu/decky/update/select-branch/publish/install/mkroot/verify-lock/snapshot-drift/steamos-manager/storage/graphics-provider/android-guestos/android-shared/mesa-source/overlay-pkgbuild/video-decode/proton-dxvk/proton-nice/store-cli/store-install/store-shortcuts/store-launch/store-dos-targets/store-dos-swap/store-compat-map/store-requests/store-library/store-artwork/store-gamepage/store-native-page/sunshine/streaming/sysctl/guard suites (host, no build needed)
 	bash $(TESTS_DIR)/test-bootctl.sh
 	bash $(TESTS_DIR)/test-post-install.sh
 	bash $(TESTS_DIR)/test-boot-disk.sh
@@ -558,6 +558,8 @@ test: verify-lock ## Run the offline bootctl/post-install/boot-disk/pairingd/pow
 	bash $(TESTS_DIR)/test-store-gamepage.sh
 	bash $(TESTS_DIR)/test-store-native-page.sh
 	bash $(TESTS_DIR)/test-store-steam-api.sh
+	bash $(TESTS_DIR)/test-sunshine.sh
+	bash $(TESTS_DIR)/test-streaming.sh
 	bash $(TESTS_DIR)/test-sysctl.sh
 	bash $(TESTS_DIR)/test-guard.sh
 
@@ -956,7 +958,7 @@ apps/decky/$(1)/dist/index.js: $$(call decky_src,$(1))
 endef
 $(foreach plugin,$(DECKY_PLUGINS),$(eval $(call DECKY_RULE,$(plugin))))
 
-decky-plugin: $(DECKY_DISTS) ## Build the Decky plugin frontends: novadeck-control, novadeck-monitor, novadeck-framegen, novadeck-stores (host docker, node)
+decky-plugin: $(DECKY_DISTS) ## Build the Decky plugin frontends: novadeck-control, novadeck-monitor, novadeck-framegen, novadeck-stores, novadeck-streaming (host docker, node)
 
 # ==============================================================================
 # Boot stage + bootable media (container)
